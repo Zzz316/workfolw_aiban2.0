@@ -1,0 +1,164 @@
+<script type="text/javascript">
+    RED.nodes.registerType('workflow-exporter', {
+        category: 'Aiban 引擎',
+        color: '#87A980',
+        defaults: {
+            name: { value: "生成引擎配置" },
+            exportPath: { value: "" },
+            dbHost: { value: "127.0.0.1" },
+            dbPort: { value: 3306 },
+            dbUser: { value: "root" }, 
+            dbPassword: { value: "root" },
+            dbCharset: { value: "GB2312" }, 
+            dbTable: { value: "icamera_data.icam_alarm_data" },
+            // --- 新增：Socket Server 默认值 ---
+            socketHost: { value: "" },
+            socketPort: { value: 10000 },
+            socketEncoding: { value: "gbk" },
+            apiServerHost: { value: "0.0.0.0" },
+            apiServerPort: { value: 18080 },
+            apiServerMaxBody: { value: 1048576 }
+        },
+        inputs: 1, outputs: 1,
+        icon: "font-awesome/fa-save",
+        paletteLabel: "exporter",
+        label: function() { return this.name || "生成引擎配置"; },
+        oneditprepare: function() {
+            var node = this;
+
+            if (!$('#node-input-exportPath').val()) {
+                $.getJSON('/aiban/default-export-dir', function(data) {
+                    if (data && data.path && !$('#node-input-exportPath').val()) {
+                        $('#node-input-exportPath').val(data.path);
+                    }
+                    if (data && data.hostname) {
+                        $('#exporter-host-hint').text('Node-RED 主机: ' + data.hostname);
+                    }
+                });
+            } else {
+                $.getJSON('/aiban/default-export-dir', function(data) {
+                    if (data && data.hostname) {
+                        $('#exporter-host-hint').text('Node-RED 主机: ' + data.hostname);
+                    }
+                });
+            }
+
+            // 加载目录数据的核心方法
+            function loadDirs(targetPath) {
+                $.getJSON('/aiban/list-dirs', { path: targetPath }, function(data) {
+                    $('#dir-browser-current').text(data.current);
+                    $('#dir-browser-list').empty();
+
+                    if (data.current !== data.parent) {
+                        $('#dir-browser-list').append('<option value="' + data.parent + '">📁 .. (返回上一级)</option>');
+                    }
+
+                    data.dirs.forEach(function(d) {
+                        var nextPath = data.current.endsWith('/') ? data.current + d : data.current + '/' + d;
+                        $('#dir-browser-list').append('<option value="' + nextPath + '">📁 ' + d + '</option>');
+                    });
+                }).fail(function() {
+                    RED.notify("无法读取该目录，可能无权限或路径不存在", "error");
+                });
+            }
+
+            $('#btn-browse-dir').click(function(e) {
+                e.preventDefault();
+                $('#dir-browser-panel').slideDown();
+                var initPath = $('#node-input-exportPath').val() || "";
+                loadDirs(initPath);
+            });
+
+            $('#dir-browser-list').dblclick(function() {
+                var selected = $(this).val();
+                if(selected) {
+                    loadDirs(selected);
+                }
+            });
+
+            $('#btn-dir-confirm').click(function(e) {
+                e.preventDefault();
+                $('#node-input-exportPath').val($('#dir-browser-current').text());
+                $('#dir-browser-panel').slideUp();
+            });
+
+            $('#btn-dir-cancel').click(function(e) {
+                e.preventDefault();
+                $('#dir-browser-panel').slideUp();
+            });
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="workflow-exporter">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 节点名称</label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+    
+    <div class="form-row">
+        <label><i class="fa fa-folder"></i> 导出目录</label>
+        <div style="display: inline-flex; width: 70%;">
+            <input type="text" id="node-input-exportPath" style="width: 100%; flex-grow: 1;" placeholder="留空使用服务器默认 workflows/ 目录">
+            <button id="btn-browse-dir" class="red-ui-button" style="margin-left: 5px;"><i class="fa fa-folder-open"></i> 浏览</button>
+        </div>
+    </div>
+    <div class="form-tips" style="margin-left: 104px; width: 70%; font-size: 12px; color: #888;">
+        此路径是 <b>Node-RED 服务器主机</b>上的目录，不是您本机的盘符。多人通过局域网共同配置时请使用服务器侧路径。
+        <span id="exporter-host-hint" style="margin-left:8px; color:#3a7;"></span>
+    </div>
+
+    <div class="form-row" id="dir-browser-panel" style="display: none; padding: 10px; background: #f9f9f9; border: 1px solid #ccc; border-radius: 4px; margin-left: 104px; width: calc(70% - 20px);">
+        <div style="margin-bottom: 8px; font-weight: bold; font-size: 13px; color: #333; word-break: break-all;" id="dir-browser-current"></div>
+        <select id="dir-browser-list" size="6" style="width: 100%; font-family: monospace; font-size: 14px; outline: none; border: 1px solid #ddd; padding: 5px;"></select>
+        <div style="margin-top: 10px; text-align: right;">
+            <button id="btn-dir-cancel" class="red-ui-button" style="background: #fff; color: #333; border: 1px solid #ccc;">取消</button>
+            <button id="btn-dir-confirm" class="red-ui-button" style="margin-left: 5px;">选中此目录</button>
+        </div>
+        <div style="margin-top: 5px; font-size: 12px; color: #888;">💡 提示：双击列表中的文件夹可进入下一级或返回上一级。</div>
+    </div>
+
+    <hr>
+    <h4>数据库配置 (DB)</h4>
+    <div class="form-row"><label>Host</label><input type="text" id="node-input-dbHost"></div>
+    <div class="form-row"><label>Port</label><input type="number" id="node-input-dbPort"></div>
+    <div class="form-row"><label>User</label><input type="text" id="node-input-dbUser"></div>
+    <div class="form-row"><label>Password</label><input type="password" id="node-input-dbPassword"></div>
+    <div class="form-row"><label>表名</label><input type="text" id="node-input-dbTable"></div>
+
+    <hr>
+    <h4>Socket 服务端配置 (可选)</h4>
+    <div class="form-row">
+        <label>监听 IP</label>
+        <input type="text" id="node-input-socketHost" placeholder="如: 172.16.27.196 (留空则不启用)">
+    </div>
+    <div class="form-row">
+        <label>监听端口</label>
+        <input type="number" id="node-input-socketPort" placeholder="10000">
+    </div>
+    <div class="form-row">
+        <label>默认编码</label>
+        <select id="node-input-socketEncoding" style="width: 70%">
+            <option value="gbk">GBK</option>
+            <option value="utf-8">UTF-8</option>
+        </select>
+    </div>
+
+    <hr>
+    <h4>API 触发服务 (可选)</h4>
+    <div style="font-size: 12px; color: #666; margin-bottom: 8px;">
+        外部系统（如 MES、PLC）调用 AI 时使用。留空 Host 表示不启动入站 API 服务。
+    </div>
+    <div class="form-row">
+        <label>监听 Host</label>
+        <input type="text" id="node-input-apiServerHost" placeholder="如: 0.0.0.0 (留空则不启用)">
+    </div>
+    <div class="form-row">
+        <label>监听端口</label>
+        <input type="number" id="node-input-apiServerPort" placeholder="18080">
+    </div>
+    <div class="form-row">
+        <label>最大请求体</label>
+        <input type="number" id="node-input-apiServerMaxBody" placeholder="1048576">
+    </div>
+</script>

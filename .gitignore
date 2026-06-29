@@ -1,0 +1,39 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+icameraapi/venv/
+# Preserved metadata from the former standalone icameraapi Git repository.
+icameraapi/.git.icameraapi-backup/
+
+# Node dependencies (custom node source is tracked at repository root)
+node_modules/
+node-red/node_modules/
+node-red-contrib-aiban-workflow/node_modules/
+
+# Runtime state, logs, databases and generated files
+log/
+logs/
+*.log
+*.log.*
+*.db
+*.db-shm
+*.db-wal
+tmp/
+output/
+outputs/
+
+# Node-RED local credentials/runtime state
+node-red/.config.*.json
+node-red/.config.*.json.backup
+node-red/.flows.json.backup
+node-red/flows_cred.json
+
+# IDE and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

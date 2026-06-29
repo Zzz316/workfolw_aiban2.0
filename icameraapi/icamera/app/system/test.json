@@ -1,0 +1,568 @@
+{
+    "nodes": [
+        {
+            "id": "100001",
+            "type": "1",
+            "properties": {
+                "base": {
+                    "nodeName": "开始",
+                    "description": "",
+                    "width": 340,
+                    "height": 118,
+                    "anchors": {
+                        "leftValid": [],
+                        "rightValid": [
+                            "*"
+                        ]
+                    },
+                    "version": "1.0.0",
+                    "x": 200,
+                    "y": 469
+                },
+                "outputs": [
+                    {
+                        "name": "input",
+                        "type": "string"
+                    }
+                ],
+                "config": {}
+            }
+        },
+        {
+            "id": "100002",
+            "type": "2",
+            "properties": {
+                "base": {
+                    "nodeName": "结束",
+                    "description": "",
+                    "width": 340,
+                    "height": 144.844,
+                    "anchors": {
+                        "leftValid": [
+                            "*"
+                        ],
+                        "rightValid": []
+                    },
+                    "version": "1.0.0",
+                    "x": 1555.5940023068051,
+                    "y": 458.3158869665513
+                },
+                "inputs": {
+                    "inputParameters": [
+                        {
+                            "name": "output",
+                            "input": {
+                                "type": "string",
+                                "value": {
+                                    "type": "literal",
+                                    "content": ""
+                                }
+                            }
+                        }
+                    ]
+                },
+                "outputs": [],
+                "config": {
+                    "isStream": "false",
+                    "returnType": "returnVariables",
+                    "answerContent": "{{output}}"
+                }
+            }
+        },
+        {
+            "id": "413b2f71-1e46-44e8-94fe-74750f52c6e5",
+            "type": "logicConfig",
+            "properties": {
+                "base": {
+                    "nodeName": "逻辑配置组件",
+                    "description": "配置工作流的逻辑规则和参数",
+                    "width": 340,
+                    "height": 146,
+                    "anchors": {
+                        "leftValid": [
+                            "*"
+                        ],
+                        "rightValid": [
+                            "*"
+                        ]
+                    },
+                    "version": "1.0.0",
+                    "group": "component",
+                    "debug": false,
+                    "x": 468.02061400279763,
+                    "y": 35.140872322020044
+                },
+                "config": {
+                    "basicInfo": {
+                        "id": "1",
+                        "params": [
+                            {
+                                "key": "label",
+                                "value": "1"
+                            }
+                        ]
+                    },
+                    "recognition": {
+                        "key": "recognition",
+                        "value": "0"
+                    },
+                    "roi": {
+                        "key": "startROI",
+                        "value": "1"
+                    },
+                    "judgmentFrame": {
+                        "key": "frameRate",
+                        "value": "11"
+                    },
+                    "judgmentSteps": {
+                        "key": "stepCount",
+                        "value": "11"
+                    },
+                    "timerSwitch": {
+                        "key": "startOrEnd",
+                        "value": "1"
+                    },
+                    "judgmentStatus": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "endTime": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "saveAbnormalImage": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "storeDatabase": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "databaseTableAddress": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "voiceAlarm": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "alarmAddress": {
+                        "key": "",
+                        "value": ""
+                    }
+                },
+                "inputs": {},
+                "outputs": [
+                    {
+                        "name": "logicResult",
+                        "type": "object",
+                        "description": "逻辑配置结果",
+                        "value": {
+                            "content": {
+                                "id": "1",
+                                "label": "1",
+                                "recognition": "0",
+                                "startROI": "1",
+                                "frameRate": "11",
+                                "stepCount": "11",
+                                "startOrEnd": "1"
+                            }
+                        },
+                        "fields": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                                "description": "组件ID"
+                            },
+                            {
+                                "name": "endTime",
+                                "type": "string",
+                                "description": "结束时间"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "id": "63c446ef-78a5-48d1-8fd0-298be6214674",
+            "type": "logicConfig",
+            "properties": {
+                "base": {
+                    "nodeName": "逻辑配置组件1",
+                    "description": "配置工作流的逻辑规则和参数",
+                    "width": 340,
+                    "height": 146,
+                    "anchors": {
+                        "leftValid": [
+                            "*"
+                        ],
+                        "rightValid": [
+                            "*"
+                        ]
+                    },
+                    "version": "1.0.0",
+                    "group": "component",
+                    "debug": false,
+                    "x": 617.5477189624283,
+                    "y": 474.26313299099377
+                },
+                "config": {
+                    "basicInfo": {
+                        "id": "2",
+                        "params": [
+                            {
+                                "key": "label",
+                                "value": "2"
+                            }
+                        ]
+                    },
+                    "recognition": {
+                        "key": "recognition",
+                        "value": "1"
+                    },
+                    "roi": {
+                        "key": "startROI",
+                        "value": "0"
+                    },
+                    "judgmentFrame": {
+                        "key": "frameRate",
+                        "value": "12"
+                    },
+                    "judgmentSteps": {
+                        "key": "stepCount",
+                        "value": "15"
+                    },
+                    "timerSwitch": {
+                        "key": "startOrEnd",
+                        "value": "0"
+                    },
+                    "judgmentStatus": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "endTime": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "saveAbnormalImage": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "storeDatabase": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "databaseTableAddress": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "voiceAlarm": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "alarmAddress": {
+                        "key": "",
+                        "value": ""
+                    }
+                },
+                "inputs": {},
+                "outputs": [
+                    {
+                        "name": "logicResult",
+                        "type": "object",
+                        "description": "逻辑配置结果",
+                        "value": {
+                            "content": {
+                                "id": "2",
+                                "label": "2",
+                                "recognition": "1",
+                                "startROI": "0",
+                                "frameRate": "12",
+                                "stepCount": "15",
+                                "startOrEnd": "0"
+                            }
+                        },
+                        "fields": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                                "description": "组件ID"
+                            },
+                            {
+                                "name": "endTime",
+                                "type": "string",
+                                "description": "结束时间"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "id": "652a41f7-42f3-40a2-b38a-010490ca3c31",
+            "type": "logicConfig",
+            "properties": {
+                "base": {
+                    "nodeName": "逻辑配置组件2",
+                    "description": "配置工作流的逻辑规则和参数",
+                    "width": 340,
+                    "height": 146,
+                    "anchors": {
+                        "leftValid": [
+                            "*"
+                        ],
+                        "rightValid": [
+                            "*"
+                        ]
+                    },
+                    "version": "1.0.0",
+                    "group": "component",
+                    "debug": false,
+                    "x": 1110.9041203465117,
+                    "y": 442.681818112101
+                },
+                "config": {
+                    "basicInfo": {
+                        "id": "3",
+                        "params": []
+                    },
+                    "recognition": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "roi": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "judgmentFrame": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "judgmentSteps": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "timerSwitch": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "judgmentStatus": {
+                        "key": "status",
+                        "value": "endTime"
+                    },
+                    "endTime": {
+                        "key": "endTime",
+                        "value": "10:11:47"
+                    },
+                    "saveAbnormalImage": {
+                        "key": "saveImg",
+                        "value": "0"
+                    },
+                    "storeDatabase": {
+                        "key": "saveSQL",
+                        "value": "1"
+                    },
+                    "databaseTableAddress": {
+                        "key": "sqlUrl",
+                        "value": "test"
+                    },
+                    "voiceAlarm": {
+                        "key": "alarm",
+                        "value": "1"
+                    },
+                    "alarmAddress": {
+                        "key": "alarmUrl",
+                        "value": "test"
+                    }
+                },
+                "inputs": {},
+                "outputs": [
+                    {
+                        "name": "logicResult",
+                        "type": "object",
+                        "description": "逻辑配置结果",
+                        "value": {
+                            "content": {
+                                "id": "3",
+                                "status": "endTime",
+                                "endTime": "10:11:47",
+                                "saveImg": "0",
+                                "saveSQL": "1",
+                                "sqlUrl": "test",
+                                "alarm": "1",
+                                "alarmUrl": "test"
+                            }
+                        },
+                        "fields": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                                "description": "组件ID"
+                            },
+                            {
+                                "name": "endTime",
+                                "type": "string",
+                                "description": "结束时间"
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "id": "e5bf8abe-d436-422c-bccf-d7c756f77fb1",
+            "type": "logicConfig",
+            "properties": {
+                "base": {
+                    "nodeName": "逻辑配置组件3",
+                    "description": "配置工作流的逻辑规则和参数",
+                    "width": 340,
+                    "height": 146,
+                    "anchors": {
+                        "leftValid": [
+                            "*"
+                        ],
+                        "rightValid": [
+                            "*"
+                        ]
+                    },
+                    "version": "1.0.0",
+                    "group": "component",
+                    "debug": false,
+                    "x": 1093.3262656752313,
+                    "y": 73.34041096100509
+                },
+                "config": {
+                    "basicInfo": {
+                        "id": "4",
+                        "params": []
+                    },
+                    "recognition": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "roi": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "judgmentFrame": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "judgmentSteps": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "timerSwitch": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "judgmentStatus": {
+                        "key": "status",
+                        "value": "ok"
+                    },
+                    "endTime": {
+                        "key": "",
+                        "value": ""
+                    },
+                    "saveAbnormalImage": {
+                        "key": "saveImg",
+                        "value": "1"
+                    },
+                    "storeDatabase": {
+                        "key": "saveSQL",
+                        "value": "1"
+                    },
+                    "databaseTableAddress": {
+                        "key": "sqlUrl",
+                        "value": "test"
+                    },
+                    "voiceAlarm": {
+                        "key": "alarm",
+                        "value": "1"
+                    },
+                    "alarmAddress": {
+                        "key": "alarmUrl",
+                        "value": "test"
+                    }
+                },
+                "inputs": {},
+                "outputs": [
+                    {
+                        "name": "logicResult",
+                        "type": "object",
+                        "description": "逻辑配置结果",
+                        "value": {
+                            "content": {
+                                "id": "4",
+                                "status": "ok",
+                                "saveImg": "1",
+                                "saveSQL": "1",
+                                "sqlUrl": "test",
+                                "alarm": "1",
+                                "alarmUrl": "test"
+                            }
+                        },
+                        "fields": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                                "description": "组件ID"
+                            },
+                            {
+                                "name": "endTime",
+                                "type": "string",
+                                "description": "结束时间"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    ],
+    "edges": [
+        {
+            "sourceID": "100001",
+            "targetID": "413b2f71-1e46-44e8-94fe-74750f52c6e5",
+            "sourceAnchorID": "100001_right",
+            "targetAnchorID": "413b2f71-1e46-44e8-94fe-74750f52c6e5_left"
+        },
+        {
+            "sourceID": "63c446ef-78a5-48d1-8fd0-298be6214674",
+            "targetID": "652a41f7-42f3-40a2-b38a-010490ca3c31",
+            "sourceAnchorID": "63c446ef-78a5-48d1-8fd0-298be6214674_right",
+            "targetAnchorID": "652a41f7-42f3-40a2-b38a-010490ca3c31_left"
+        },
+        {
+            "sourceID": "652a41f7-42f3-40a2-b38a-010490ca3c31",
+            "targetID": "100002",
+            "sourceAnchorID": "652a41f7-42f3-40a2-b38a-010490ca3c31_right",
+            "targetAnchorID": "100002_left"
+        },
+        {
+            "sourceID": "100001",
+            "targetID": "63c446ef-78a5-48d1-8fd0-298be6214674",
+            "sourceAnchorID": "100001_right",
+            "targetAnchorID": "63c446ef-78a5-48d1-8fd0-298be6214674_left"
+        },
+        {
+            "sourceID": "413b2f71-1e46-44e8-94fe-74750f52c6e5",
+            "targetID": "652a41f7-42f3-40a2-b38a-010490ca3c31",
+            "sourceAnchorID": "413b2f71-1e46-44e8-94fe-74750f52c6e5_right",
+            "targetAnchorID": "652a41f7-42f3-40a2-b38a-010490ca3c31_left"
+        },
+        {
+            "sourceID": "413b2f71-1e46-44e8-94fe-74750f52c6e5",
+            "targetID": "e5bf8abe-d436-422c-bccf-d7c756f77fb1",
+            "sourceAnchorID": "413b2f71-1e46-44e8-94fe-74750f52c6e5_right",
+            "targetAnchorID": "e5bf8abe-d436-422c-bccf-d7c756f77fb1_left"
+        },
+        {
+            "sourceID": "e5bf8abe-d436-422c-bccf-d7c756f77fb1",
+            "targetID": "100002",
+            "sourceAnchorID": "e5bf8abe-d436-422c-bccf-d7c756f77fb1_right",
+            "targetAnchorID": "100002_left"
+        }
+    ]
+}

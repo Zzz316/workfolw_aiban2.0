@@ -1,0 +1,342 @@
+<script type="text/javascript">
+    RED.nodes.registerType('workflow-monitor', {
+        category: 'Aiban 引擎',
+        color: '#F4A261',
+        defaults: {
+            name: { value: "安环监控" },
+            groupId: { value: "" },
+            modelId: { value: "" },
+            cooldown: { value: 30 },
+            saveResult: { value: false },
+            resultTable: { value: "icamera_data.icam_alarm_data" },
+            rules: { value: [] },
+            _groupCameraMap: { value: {} },
+            _modelMap: { value: {} },
+            _groupInferMap: { value: {} }
+        },
+        inputs: 1, outputs: 1, icon: "font-awesome/fa-shield",
+        paletteLabel: "monitor",
+        label: function() { return this.name || "安环监控"; },
+        oneditprepare: function() {
+            var node = this;
+
+            // ── 工具：构造子模型下拉 ──
+            function buildSubModelOptions(selectElem, savedVal) {
+                selectElem.empty().append('<option value="">选择模型</option>');
+                if (node._modelMap) {
+                    Object.keys(node._modelMap).forEach(function(mid) {
+                        selectElem.append($('<option>', { value: mid, text: mid + " (" + node._modelMap[mid].modelName + ")" }));
+                    });
+                }
+                if (savedVal !== undefined && savedVal !== null && savedVal !== "") selectElem.val(String(savedVal));
+            }
+
+            function buildSubLabelOptions(selectElem, subId, savedVal) {
+                selectElem.empty().append('<option value="">请选择</option>');
+                if (subId && node._modelMap && node._modelMap[subId] && node._modelMap[subId].labels) {
+                    node._modelMap[subId].labels.forEach(function(lbl) {
+                        var val = typeof lbl === 'object' ? (lbl.name || lbl.labelName) : lbl;
+                        if (val) selectElem.append($('<option>', { value: val, text: val }));
+                    });
+                }
+                if (savedVal) selectElem.val(savedVal);
+            }
+
+            // ── 一行子模型条目 ──
+            function addSubModelRow(listContainer, data) {
+                data = data || { model_id: "", label: "", confidence: 0.5 };
+                var row = $('<div/>', { class: "sub-model-row", style: "display:flex; gap:6px; align-items:center; margin-top:4px;" }).appendTo(listContainer);
+
+                row.append('<span style="font-size:12px; color:#333; white-space:nowrap;">模型:</span>');
+                var midSel = $('<select/>', { class: "sub-mid", style: "flex:1; min-width:90px;" }).appendTo(row);
+
+                row.append('<span style="font-size:12px; color:#333; white-space:nowrap;">标签:</span>');
+                var lblSel = $('<select/>', { class: "sub-lbl", style: "flex:1; min-width:80px;" }).appendTo(row);
+
+                row.append('<span style="font-size:12px; color:#333; white-space:nowrap;">置信度≥</span>');
+                $('<input/>', { class: "sub-conf", type: "number", step: "0.1", style: "width:55px; flex-shrink:0;" }).val(data.confidence || 0.5).appendTo(row);
+
+                $('<button/>', { type: "button", class: "red-ui-button", style: "flex-shrink:0;", title: "删除此子模型" })
+                    .append('<i class="fa fa-times"></i>')
+                    .click(function() { row.remove(); })
+                    .appendTo(row);
+
+                buildSubModelOptions(midSel, data.model_id);
+                buildSubLabelOptions(lblSel, data.model_id, data.label);
+                midSel.change(function() { buildSubLabelOptions(lblSel, $(this).val(), ""); });
+            }
+
+            $('#node-input-rules-container').editableList({
+                addItem: function(container, i, opt) {
+                    var rule = opt.id ? opt : {
+                        id: "rule" + (i + 1),
+                        label: "",
+                        confidence: 0.5,
+                        type: "on_present",
+                        frames: 10,
+                        alarm_name: "",
+                        speak: false
+                    };
+
+                    container.css({ display: 'flex', flexDirection: 'column', gap: '6px', paddingBottom: '6px' });
+
+                    // 第一行：基础配置
+                    var row1 = $('<div/>', { style: "display:flex; gap:6px; align-items:center; flex-wrap:wrap; width:100%;" }).appendTo(container);
+
+                    row1.append('<span style="font-size:12px; color:#555; font-weight:bold; white-space:nowrap;">规则ID:</span>');
+                    $('<input/>', { class: "rule-id", type: "text", style: "width:60px; flex-shrink:0;" }).val(rule.id).appendTo(row1);
+
+                    row1.append('<span style="font-size:12px; color:#555; white-space:nowrap;">模型:</span>');
+                    var modelSel = $('<select/>', { class: "rule-model", style: "flex:1; min-width:85px;", title: "可独立覆盖一阶模型" }).appendTo(row1);
+                    modelSel.data('saved-val', rule.model_id || "");
+
+                    row1.append('<span style="font-size:12px; color:#555; white-space:nowrap;">标签:</span>');
+                    var labelSel = $('<select/>', { class: "rule-label", style: "flex:1; min-width:85px;" }).appendTo(row1);
+                    labelSel.data('saved-val', rule.label);
+
+                    row1.append('<span style="font-size:12px; color:#555; white-space:nowrap;">置信度≥</span>');
+                    $('<input/>', { class: "rule-conf", type: "number", step: "0.1", style: "width:55px; flex-shrink:0;" }).val(rule.confidence).appendTo(row1);
+
+                    var subWrap = $('<label/>', { style: "margin:0 0 0 6px; display:flex; align-items:center; font-size:12px; cursor:pointer; color:#0066cc; font-weight:bold; white-space:nowrap;" }).appendTo(row1);
+                    var subCheck = $('<input/>', { class: "rule-has-sub", type: "checkbox", style: "margin:0 4px 0 0; width:auto; height:auto;" }).appendTo(subWrap);
+                    subWrap.append("二阶子框");
+
+                    // 第二行：触发条件与报警
+                    var row2 = $('<div/>', { style: "display:flex; gap:6px; align-items:center; flex-wrap:wrap; width:100%; margin-top:2px;" }).appendTo(container);
+
+                    row2.append('<span style="font-size:12px; color:#555; white-space:nowrap;" title="on_present: 持续出现 N 帧触发; on_absent: 持续缺失 N 帧触发">类型:</span>');
+                    var typeSel = $('<select/>', { class: "rule-type", style: "width:130px; flex-shrink:0;" }).appendTo(row2);
+                    typeSel.append('<option value="on_present">on_present(持续出现)</option>');
+                    typeSel.append('<option value="on_absent">on_absent(持续缺失)</option>');
+                    typeSel.val(rule.type || "on_present");
+
+                    row2.append('<span style="font-size:12px; color:#555; white-space:nowrap;" title="触发所需的连续帧数">帧数≥</span>');
+                    $('<input/>', { class: "rule-frames", type: "number", style: "width:60px; flex-shrink:0;" }).val(rule.frames || 10).appendTo(row2);
+
+                    row2.append('<span style="font-size:12px; color:#555; white-space:nowrap;" title="报警名称，需与 icam_alarmname_data 中的 alarmname 对应">NG报错名:</span>');
+                    $('<input/>', { class: "rule-alarm-name", type: "text", placeholder: "如:未戴安全帽", style: "flex:1; min-width:120px;" }).val(rule.alarm_name || "").appendTo(row2);
+
+                    // 触发扬声器复选框
+                    var speakWrap = $('<label/>', { style: "margin:0 0 0 6px; display:flex; align-items:center; font-size:12px; cursor:pointer; color:#e65100; white-space:nowrap;", title: "勾选后，此规则触发报警时将同时发送喇叭播报指令" }).appendTo(row2);
+                    $('<input/>', { class: "rule-speak", type: "checkbox", style: "margin:0 4px 0 0; width:auto; height:auto;" }).prop('checked', !!rule.speak).appendTo(speakWrap);
+                    speakWrap.append('<i class="fa fa-volume-up"></i> 喇叭');
+
+                    // 第三行：二阶子框面板（多子模型列表）
+                    var row3 = $('<div/>', { class: "rule-sub-row", style: "display:none; flex-direction:column; gap:4px; padding:6px 8px; background:#eef4fb; border-radius:4px; border:1px dashed #b1cce8; width:100%; box-sizing:border-box; margin-top:2px;" }).appendTo(container);
+
+                    var subHeader = $('<div/>', { style: "display:flex; align-items:center; gap:8px;" }).appendTo(row3);
+                    subHeader.append('<span style="font-size:12px; color:#333;"><i class="fa fa-level-down"></i> 二阶子模型（同模型多行=OR，不同模型=AND）:</span>');
+                    var addSubBtn = $('<button/>', { type: "button", class: "red-ui-button red-ui-button-small", style: "margin-left:auto;" })
+                        .append('<i class="fa fa-plus"></i> 添加子模型')
+                        .appendTo(subHeader);
+
+                    var subList = $('<div/>', { class: "rule-sub-list", style: "display:flex; flex-direction:column; gap:4px;" }).appendTo(row3);
+
+                    addSubBtn.click(function() { addSubModelRow(subList, null); });
+
+                    // 联动逻辑
+                    function populateRuleModel(selectElem) {
+                        selectElem.empty().append('<option value="">[全局默认]</option>');
+                        if (node._modelMap) {
+                            Object.keys(node._modelMap).forEach(mid => {
+                                selectElem.append($('<option>', { value: mid, text: "M" + mid + ":" + node._modelMap[mid].modelName }));
+                            });
+                        }
+                        var savedVal = selectElem.data('saved-val');
+                        if (savedVal) selectElem.val(savedVal);
+                    }
+
+                    subCheck.change(function() {
+                        if ($(this).is(':checked')) row3.css('display', 'flex');
+                        else row3.hide();
+                    });
+
+                    modelSel.change(function() {
+                        labelSel.data('saved-val', "");
+                        populateRuleLabel(labelSel, $(this));
+                    });
+
+                    // label 改变时，按 group_inf_map 自动加一条二阶子模型（若当前列表为空）
+                    labelSel.change(function() {
+                        var selectedName = $(this).val();
+                        var effectiveMid = modelSel.val() || $('#node-input-modelId').val();
+                        var gid = $('#node-input-groupId').val();
+                        if (effectiveMid && node._modelMap[effectiveMid] && gid && node._groupInferMap && node._groupInferMap[gid]) {
+                            var labelObj = node._modelMap[effectiveMid].labels.find(l => (typeof l === 'object' ? (l.name || l.labelName) : l) === selectedName);
+                            if (labelObj && typeof labelObj === 'object' && labelObj.sign !== undefined) {
+                                var mappedSubId = node._groupInferMap[gid][String(labelObj.sign)];
+                                if (mappedSubId !== undefined && subList.children().length === 0) {
+                                    subCheck.prop('checked', true).trigger('change');
+                                    addSubModelRow(subList, { model_id: mappedSubId, label: "", confidence: 0.5 });
+                                }
+                            }
+                        }
+                    });
+
+                    // 恢复已保存的 sub_models（新格式）；兼容旧 sub_model_id+sub_label
+                    var initialSubs = [];
+                    if (Array.isArray(rule.sub_models) && rule.sub_models.length > 0) {
+                        rule.sub_models.forEach(function(sm) {
+                            var mid = sm.model_id;
+                            (sm.labels || []).forEach(function(lbl) {
+                                initialSubs.push({ model_id: mid, label: lbl.name || "", confidence: lbl.confidence || 0.5 });
+                            });
+                            if (!sm.labels || sm.labels.length === 0) {
+                                initialSubs.push({ model_id: mid, label: "", confidence: 0.5 });
+                            }
+                        });
+                    } else if (rule.sub_model_id && rule.sub_label) {
+                        initialSubs.push({
+                            model_id: rule.sub_model_id,
+                            label: rule.sub_label.name || "",
+                            confidence: rule.sub_label.confidence || 0.5
+                        });
+                    }
+
+                    if (initialSubs.length > 0) {
+                        subCheck.prop('checked', true);
+                        row3.css('display', 'flex');
+                        initialSubs.forEach(function(s) { addSubModelRow(subList, s); });
+                    }
+
+                    populateRuleModel(modelSel);
+                    populateRuleLabel(labelSel, modelSel);
+                },
+                removable: true
+            });
+
+            function populateRuleLabel(labelElem, modelElem) {
+                labelElem.empty().append('<option value="">Label</option>');
+                var effectiveMid = modelElem.val() || $('#node-input-modelId').val();
+                if (effectiveMid && node._modelMap && node._modelMap[effectiveMid] && node._modelMap[effectiveMid].labels) {
+                    node._modelMap[effectiveMid].labels.forEach(lbl => {
+                        var val = typeof lbl === 'object' ? (lbl.name || lbl.labelName) : lbl;
+                        if (val) labelElem.append($('<option>', { value: val, text: val }));
+                    });
+                }
+                var savedVal = labelElem.data('saved-val');
+                if (savedVal) labelElem.val(savedVal);
+                setTimeout(function() { labelElem.trigger('change'); }, 50);
+            }
+
+            function updateAllRuleRows() {
+                $('.rule-label').each(function() {
+                    var currentVal = $(this).val() || $(this).data('saved-val');
+                    $(this).data('saved-val', currentVal);
+                    var modelElem = $(this).closest('li').find('.rule-model');
+                    if (!modelElem.val()) populateRuleLabel($(this), modelElem);
+                });
+                $('.rule-model').each(function() {
+                    var currentVal = $(this).val() || $(this).data('saved-val');
+                    $(this).data('saved-val', currentVal);
+                    $(this).empty().append('<option value="">[全局默认]</option>');
+                    var self = this;
+                    if (node._modelMap) Object.keys(node._modelMap).forEach(mid => $(self).append($('<option>', { value: mid, text: "M" + mid + ":" + node._modelMap[mid].modelName })));
+                    if (currentVal) $(this).val(currentVal);
+                });
+            }
+
+            function updateDropdowns() {
+                $('#node-input-groupId').empty().append('<option value="">选择群组</option>');
+                if (node._groupCameraMap) Object.keys(node._groupCameraMap).forEach(gid => $('#node-input-groupId').append($('<option>', { value: gid, text: "Group " + gid })));
+                $('#node-input-groupId').val(node.groupId);
+
+                $('#node-input-modelId').empty().append('<option value="">选择模型</option>');
+                if (node._modelMap) Object.keys(node._modelMap).forEach(mid => $('#node-input-modelId').append($('<option>', { value: mid, text: node._modelMap[mid].modelName + "(ID:" + mid + ")" })));
+                $('#node-input-modelId').val(node.modelId);
+
+                updateAllRuleRows();
+            }
+
+            $('#node-input-modelId').change(updateAllRuleRows);
+            $('#node-input-saveResult').change(function() {
+                if ($(this).is(':checked')) $('#monitor-result-panel').slideDown();
+                else $('#monitor-result-panel').slideUp();
+            });
+
+            $.getJSON("/aiban/global-yaml", function(data) {
+                if (data && Object.keys(data.groupCameraMap || {}).length > 0) {
+                    node._groupCameraMap = data.groupCameraMap;
+                    node._modelMap = data.modelMap;
+                    node._groupInferMap = data.groupInferMap;
+                    updateDropdowns();
+                }
+            });
+
+            $('#btn-upload').click(function(e) {
+                e.preventDefault();
+                aibanBrowseServerYaml(function(data) {
+                    node._groupCameraMap = data.groupCameraMap;
+                    node._modelMap = data.modelMap;
+                    node._groupInferMap = data.groupInferMap;
+                    updateDropdowns();
+                });
+            });
+
+            updateDropdowns();
+            if (node.rules) node.rules.forEach(r => $('#node-input-rules-container').editableList('addItem', r));
+            if (node.saveResult) $('#monitor-result-panel').show();
+        },
+        oneditsave: function() {
+            var node = this;
+            node.rules = [];
+            $('#node-input-rules-container').editableList('items').each(function() {
+                var el = $(this);
+                var r = {
+                    id: el.find(".rule-id").val(),
+                    label: el.find(".rule-label").val(),
+                    confidence: parseFloat(el.find(".rule-conf").val()) || 0.5,
+                    type: el.find(".rule-type").val() || "on_present",
+                    frames: parseInt(el.find(".rule-frames").val()) || 10
+                };
+                var ruleMid = el.find(".rule-model").val();
+                if (ruleMid) r.model_id = parseInt(ruleMid);
+
+                var alarmName = el.find(".rule-alarm-name").val();
+                if (alarmName) r.alarm_name = alarmName;
+
+                var speakChecked = el.find(".rule-speak").is(':checked');
+                if (speakChecked) r.speak = true;
+
+                if (el.find(".rule-has-sub").is(':checked')) {
+                    // 按 model_id 聚合多行 → sub_models 数组
+                    var grouped = {};
+                    el.find(".sub-model-row").each(function() {
+                        var rowEl = $(this);
+                        var smid = parseInt(rowEl.find(".sub-mid").val());
+                        var sname = rowEl.find(".sub-lbl").val();
+                        var sconf = parseFloat(rowEl.find(".sub-conf").val()) || 0.5;
+                        if (isNaN(smid) || !sname) return;
+                        if (!grouped[smid]) grouped[smid] = { model_id: smid, labels: [] };
+                        grouped[smid].labels.push({ name: sname, confidence: sconf });
+                    });
+                    var subModels = Object.values(grouped);
+                    if (subModels.length > 0) r.sub_models = subModels;
+                }
+                node.rules.push(r);
+            });
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="workflow-monitor">
+    <div class="form-row">
+        <button type="button" class="red-ui-button" id="btn-upload" style="width: 100%;"><i class="fa fa-folder-open"></i> 选择服务器 YAML (含二阶解析)</button>
+    </div>
+    <div class="form-row"><label>节点名称</label><input type="text" id="node-input-name"></div>
+    <div class="form-row"><label>摄像头群组</label><select id="node-input-groupId" style="width:70%"></select></div>
+    <div class="form-row"><label>默认模型</label><select id="node-input-modelId" style="width:70%"></select></div>
+    <div class="form-row"><label>报警冷却(秒)</label><input type="number" id="node-input-cooldown" style="width:70%"></div>
+    <hr>
+    <div class="form-row">
+        <label>结果入库</label><input type="checkbox" id="node-input-saveResult" style="display:inline-block; width:auto; vertical-align:top;">
+        <span style="font-size: 12px; color: #666;"> 触发时同时写入报警结果表 (status=NG)</span>
+    </div>
+    <div id="monitor-result-panel" style="display:none; padding:10px; background:#fff3e0; border:1px dashed #ffb74d; border-radius:4px; margin-bottom:12px;">
+        <div class="form-row" style="margin-bottom:0;"><label>结果表名</label><input type="text" id="node-input-resultTable" style="width:70%" placeholder="icamera_data.icam_alarm_data"></div>
+        <div class="form-row" style="font-size:12px;color:#666;margin-left:104px; margin-bottom:0;">报警名称取每条规则的“NG报错名”，需与 icam_alarmname_data.alarmname 对应。</div>
+    </div>
+    <hr>
+    <div class="form-row" style="margin-bottom:0;"><label><i class="fa fa-shield"></i> 监控规则 (Rules)</label></div>
+    <div class="form-row"><ol id="node-input-rules-container" style="min-height:200px;"></ol></div>
+</script>

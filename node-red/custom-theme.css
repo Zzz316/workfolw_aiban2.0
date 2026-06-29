@@ -1,0 +1,20 @@
+/* 隐藏 Node-RED 顶部导航栏 */
+#red-ui-header,
+#red-ui-header-shade,
+#header,
+.red-ui-header {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+}
+
+/* 调整主工作区位置，填补顶部留下的空白 */
+#red-ui-main-container,
+#main-container,
+.red-ui-main-container {
+    top: 0 !important;
+}
+
+/* （可选调试）如果你想确认 CSS 是否生效，可以取消下面这行的注释看看背景变不变粉色 */
+/* body { background-color: pink !important; } */

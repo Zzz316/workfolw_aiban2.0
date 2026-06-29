@@ -1,0 +1,21 @@
+{
+  "name": "template_python_flow",
+  "mode": "python",
+  "group_id": 1,
+  "handler": "scenes.template_flow:TemplateFlow",
+  "params": {
+    "alarm_cooldown": 5,
+    "model_id": 1,
+    "required_frames": 10,
+    "target_label": "person",
+    "target_conf": 0.5
+  },
+  "db": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": "",
+    "charset": "utf8mb4",
+    "alarm_table": "icamera_data.icam_alarm_data"
+  }
+}

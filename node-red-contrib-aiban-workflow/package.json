@@ -1,0 +1,28 @@
+{
+  "name": "node-red-contrib-aiban-workflow",
+  "version": "1.0.0",
+  "description": "Node-RED nodes for Aiban Workflow Engine",
+  "main": "sequence-node.js",
+  "keywords": [
+    "node-red",
+    "aiban",
+    "workflow"
+  ],
+  "node-red": {
+    "nodes": {
+      "workflow-sequence": "sequence-node.js",
+      "workflow-timer": "timer-node.js",
+      "workflow-state": "state-node.js",
+      "workflow-monitor": "monitor-node.js",
+      "workflow-exporter": "exporter-node.js",
+      "workflow-socket-client": "socket-client-node.js",
+      "workflow-api-trigger": "api-trigger-node.js",
+      "workflow-api-output": "api-output-node.js"
+    }
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.1"
+  },
+  "author": "Your Name",
+  "license": "MIT"
+}
