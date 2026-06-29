@@ -1,0 +1,35 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-frame-input", {
+        category: "艾班工作流",
+        color: "#5b8ff9",
+        defaults: {
+            name: { value: "" },
+            endpoint: { value: "tcp://127.0.0.1:5557", required: true },
+            inboxPath: { value: "data/frame_bridge/inbox.db", required: true }
+        },
+        inputs: 0,
+        outputs: 1,
+        icon: "bridge.svg",
+        label: function () { return this.name || "AiBan 帧输入"; }
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-frame-input">
+    <div class="form-row">
+        <label for="node-input-name">名称</label>
+        <input type="text" id="node-input-name" placeholder="AiBan 帧输入">
+    </div>
+    <div class="form-row">
+        <label for="node-input-endpoint">监听地址</label>
+        <input type="text" id="node-input-endpoint" placeholder="tcp://127.0.0.1:5557">
+    </div>
+    <div class="form-row">
+        <label for="node-input-inboxPath">Inbox 路径</label>
+        <input type="text" id="node-input-inboxPath" placeholder="data/frame_bridge/inbox.db">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="aiban-frame-input">
+    <p>接收 Python AiBan 帧桥数据。消息持久化到 SQLite inbox 后才返回 ACK。</p>
+    <p><code>msg.payload</code> 为标准化帧，重复 message_id 不会重复输出。</p>
+</script>

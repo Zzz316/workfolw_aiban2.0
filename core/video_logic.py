@@ -18,10 +18,12 @@ except Exception:
     pass
 
 from core.infra import global_sys_logger, alam_msg, api_trigger_logger
+from core.frame_bridge import FrameBridge, FrameBridgeConfig
 from core.workflow_engine import WorkflowEngine
 
 # workflows/ 目录位于项目根
-_WORKFLOWS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "workflows")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_WORKFLOWS_DIR = os.path.join(_PROJECT_ROOT, "workflows")
 
 
 class AibanVideoProcess:
@@ -46,6 +48,17 @@ class AibanVideoProcess:
         self._api_server = None
         self._api_server_thread = None
         self._api_server_address = None
+        self._bridge = None
+        self._bridge_config = FrameBridgeConfig.from_env(_PROJECT_ROOT)
+        self._legacy_engine_enabled = os.getenv(
+            "AIBAN_V1_ENGINE_ENABLED", "1"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if self._bridge_config.enabled:
+            self._bridge = FrameBridge(
+                self._bridge_config,
+                source_control=self.videoinstance.sourceControl,
+                logger=global_sys_logger,
+            )
         self._start_api_server_if_needed()
         self._watcher = threading.Thread(target=self._workflow_watcher, name="workflow-watcher", daemon=True)
         self._watcher.start()
@@ -162,8 +175,17 @@ class AibanVideoProcess:
             self.videoinstance.registerVideoMsgEventFunc(self._video_msg_event_callback)
         except Exception as ee:
             global_sys_logger.warning("registerVideoMsgEventFunc 不可用: %s", ee)
-        self.videoinstance.checkAllConfig(self.piplieconfig)
-        self.videoinstance.buildPipline()
+        if self._bridge:
+            self._bridge.start()
+            global_sys_logger.info(
+                "Workflow 2.0 frame bridge enabled endpoint=%s outbox=%s",
+                self._bridge_config.endpoint,
+                self._bridge_config.outbox_path,
+            )
+        config_result = self.videoinstance.checkAllConfig(self.piplieconfig)
+        global_sys_logger.info("AiBan config check result=%s", config_result)
+        build_result = self.videoinstance.buildPipline()
+        global_sys_logger.info("AiBan pipeline build result=%s", build_result)
 
     def stop(self):
         """通知 SDK 停止 pipeline 并停掉热重载线程，多次调用安全。"""
@@ -179,6 +201,12 @@ class AibanVideoProcess:
             global_sys_logger.exception("stopPipline 调用失败: %s", ee)
         if self._watcher.is_alive():
             self._watcher.join(timeout=1)
+        if self._bridge:
+            try:
+                self._bridge.stop()
+                global_sys_logger.info("Workflow 2.0 frame bridge stopped")
+            except Exception as ee:
+                global_sys_logger.exception("frame bridge stop failed: %s", ee)
 
     def region_name(self):
         """懒加载区域名称，避免阻塞初始化"""
@@ -216,8 +244,11 @@ class AibanVideoProcess:
     def aibanvideometadataresult_callback(self, err: bool, groupid: int, sourceid: int, metadata: AiBanVideoPy.IAibanVideoMetaData):
         try:
             if not err:
-                camera_key = f"camera_{sourceid}"
-                self.engine.on_frame(camera_key, groupid, sourceid, metadata)
+                if self._bridge:
+                    self._bridge.submit_metadata(groupid, sourceid, metadata)
+                if self._legacy_engine_enabled:
+                    camera_key = f"camera_{sourceid}"
+                    self.engine.on_frame(camera_key, groupid, sourceid, metadata)
         except Exception as ee:
             global_sys_logger.exception(ee)
 

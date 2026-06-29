@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "description": "Node-RED nodes for Aiban Workflow Engine",
   "main": "sequence-node.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
   "keywords": [
     "node-red",
     "aiban",
@@ -17,11 +23,13 @@
       "workflow-exporter": "exporter-node.js",
       "workflow-socket-client": "socket-client-node.js",
       "workflow-api-trigger": "api-trigger-node.js",
-      "workflow-api-output": "api-output-node.js"
+      "workflow-api-output": "api-output-node.js",
+      "aiban-frame-input": "frame-input-node.js"
     }
   },
   "dependencies": {
-    "js-yaml": "^4.1.1"
+    "js-yaml": "^4.1.1",
+    "zeromq": "^6.5.0"
   },
   "author": "Your Name",
   "license": "MIT"
