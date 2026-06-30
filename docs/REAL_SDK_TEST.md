@@ -48,6 +48,16 @@ frame=1 标签=[m1:person(0.950)] 转换并入队=1.234ms
 [FrameBridge延迟] ... ACK往返=2.345ms 总投递=5.678ms
 ```
 
+It also prints two local audit paths:
+
+```text
+logs/frame_bridge/transmission-<run-id>.jsonl
+logs/frame_bridge/transmission-<run-id>.log
+```
+
+See `docs/AIBAN_TO_NODE_RED_DATA_PATH.md` for event definitions and the
+reliability/latency design.
+
 ## Node-RED timing output
 
 Enable **显示耗时** in the `aiban-frame-input` node and set **每 N 帧记录**.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Deque, Dict, Optional, Tuple
@@ -50,10 +51,12 @@ class FrameBridge:
         self,
         config: FrameBridgeConfig,
         source_control: Optional[Callable[[int, int, bool], bool]] = None,
+        audit_callback: Optional[Callable[..., None]] = None,
         logger=None,
     ):
         self.config = config
         self.source_control = source_control
+        self.audit_callback = audit_callback
         self.logger = logger
         self.adapter = FrameAdapter()
         self.outbox = DurableOutbox(config.outbox_path)
@@ -65,6 +68,7 @@ class FrameBridge:
             batch_size=config.batch_size,
             log_every=config.log_every,
             console_latency=config.console_latency,
+            audit_callback=audit_callback,
             logger=logger,
         )
         self._queue: Deque[Tuple[Dict, int, int]] = deque()
@@ -93,6 +97,17 @@ class FrameBridge:
             if depth >= self.config.high_watermark:
                 self._pause_requests.add(key)
             self._condition.notify()
+        self._audit(
+            "sdk_received",
+            message_id=message["message_id"],
+            stream_id=message["stream_id"],
+            frame_seq=message["frame_seq"],
+            sdk_received_at=message["sdk_received_at"],
+            sdk_received_at_ms=message["sdk_received_at_ms"],
+            sdk_convert_ms=message["sdk_convert_ms"],
+            labels=self._labels(message),
+            ingress_depth=depth,
+        )
         return message
 
     def stats(self) -> Dict:
@@ -123,7 +138,23 @@ class FrameBridge:
                     return
                 message, group_id, source_id = self._queue.popleft()
             try:
+                persist_started_ns = time.perf_counter_ns()
                 self.outbox.enqueue(message)
+                persist_ms = (
+                    time.perf_counter_ns() - persist_started_ns
+                ) / 1_000_000
+                self._audit(
+                    "outbox_persisted",
+                    message_id=message["message_id"],
+                    stream_id=message["stream_id"],
+                    frame_seq=message["frame_seq"],
+                    outbox_persist_ms=round(persist_ms, 3),
+                    queue_wait_ms=round(
+                        time.time() * 1000
+                        - float(message["bridge_created_at_ms"]),
+                        3,
+                    ),
+                )
             except Exception:
                 with self._condition:
                     self._queue.appendleft((message, group_id, source_id))
@@ -153,6 +184,28 @@ class FrameBridge:
             ):
                 self._resume_sources()
             threading.Event().wait(0.2)
+
+    def _audit(self, event: str, **fields) -> None:
+        if self.audit_callback:
+            try:
+                self.audit_callback(event, **fields)
+            except Exception:
+                if self.logger:
+                    self.logger.exception("frame transmission audit callback failed")
+
+    @staticmethod
+    def _labels(message: Dict) -> list:
+        labels = []
+        for model_id, result in (message.get("models") or {}).items():
+            for box in (result or {}).get("boxes", []):
+                labels.append(
+                    {
+                        "model_id": str(model_id),
+                        "label": str(box.get("label", "")),
+                        "confidence": float(box.get("confidence", 0.0) or 0.0),
+                    }
+                )
+        return labels
 
     def _pause_source(self, group_id: int, source_id: int) -> None:
         key = (int(group_id), int(source_id))

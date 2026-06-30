@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -16,7 +17,7 @@ PROJECT_ROOT = SCRIPT_DIR if (SCRIPT_DIR / "core").is_dir() else SCRIPT_DIR.pare
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.frame_bridge import FrameBridge, FrameBridgeConfig
+from core.frame_bridge import FrameBridge, FrameBridgeConfig, TransmissionAuditLogger
 
 
 def collect_labels(message):
@@ -91,6 +92,11 @@ def main():
     )
     logger = logging.getLogger("aiban-sdk-bridge-test")
     engine = AiBanVideoPy.aibanVideoGetInstance()
+    run_id = "{}-{}".format(datetime.now().strftime("%Y%m%d-%H%M%S"), os.getpid())
+    audit = TransmissionAuditLogger(
+        str(PROJECT_ROOT / "logs" / "frame_bridge"),
+        run_id,
+    )
     outbox_path = (
         Path(args.outbox)
         if args.outbox
@@ -110,7 +116,12 @@ def main():
         log_every=max(1, args.print_every),
         console_latency=True,
     )
-    bridge = FrameBridge(config, source_control=engine.sourceControl, logger=logger)
+    bridge = FrameBridge(
+        config,
+        source_control=engine.sourceControl,
+        audit_callback=audit.record,
+        logger=logger,
+    )
     frame_count = 0
 
     def on_result(err, group_id, source_id, metadata):
@@ -155,6 +166,8 @@ def main():
     bridge.start()
     print("Node-RED endpoint：{}".format(args.endpoint), flush=True)
     print("本次测试outbox：{}".format(outbox_path), flush=True)
+    print("详细JSONL日志：{}".format(audit.jsonl_path), flush=True)
+    print("详细文本日志：{}".format(audit.text_path), flush=True)
     print("SDK pipeline：{}".format(args.pipeline_config), flush=True)
     print("按 Ctrl+C 停止。", flush=True)
 
@@ -171,6 +184,7 @@ def main():
     finally:
         engine.stopPipline()
         bridge.stop()
+        audit.close()
         print("已停止，共收到 {} 帧。".format(frame_count), flush=True)
     return 0
 

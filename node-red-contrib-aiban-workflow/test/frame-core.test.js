@@ -52,5 +52,13 @@ test("inbox persists once and preserves pending frames after restart", () => {
 });
 
 test("ack includes a valid checksum", () => {
-    assert.equal(protocol.verify(protocol.makeAck(frame())), true);
+    const value = frame();
+    value.node_received_at = "2026-06-30T02:00:00.123Z";
+    value.node_received_at_ms = 1782784800123;
+    value.receive_diff_ms = 5;
+    value._timing = { node_inbox_persist_ms: 0.75 };
+    const ack = protocol.makeAck(value);
+    assert.equal(protocol.verify(ack), true);
+    assert.equal(ack.node_receive_diff_ms, 5);
+    assert.equal(ack.node_inbox_persist_ms, 0.75);
 });

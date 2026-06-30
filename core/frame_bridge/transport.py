@@ -21,6 +21,7 @@ class ZmqDealerTransport:
         batch_size: int = 100,
         log_every: int = 1,
         console_latency: bool = False,
+        audit_callback: Optional[Callable[..., None]] = None,
         logger=None,
     ):
         self.endpoint = endpoint
@@ -30,6 +31,7 @@ class ZmqDealerTransport:
         self.batch_size = max(1, int(batch_size))
         self.log_every = max(0, int(log_every))
         self.console_latency = bool(console_latency)
+        self.audit_callback = audit_callback
         self.logger = logger
         self._ack_count = 0
         self._stop = threading.Event()
@@ -75,6 +77,14 @@ class ZmqDealerTransport:
                     envelope = make_envelope(row["payload"])
                     socket.send(canonical_json(envelope).encode("utf-8"))
                     self.outbox.mark_sent(row["message_id"])
+                    self._audit(
+                        "transport_sent",
+                        message_id=row["message_id"],
+                        stream_id=row["stream_id"],
+                        frame_seq=row["frame_seq"],
+                        sent_at_ms=envelope["sent_at_ms"],
+                        send_count=int(row["send_count"] or 0) + 1,
+                    )
 
                 events = dict(poller.poll(100))
                 if socket in events:
@@ -87,6 +97,15 @@ class ZmqDealerTransport:
                         ):
                             details = self.outbox.acknowledge_details(ack["message_id"])
                             if details:
+                                self._audit(
+                                    "node_ack_received",
+                                    **details,
+                                    node_received_at=ack.get("node_received_at"),
+                                    node_received_at_ms=ack.get("node_received_at_ms"),
+                                    node_receive_diff_ms=ack.get("node_receive_diff_ms"),
+                                    node_inbox_persist_ms=ack.get("node_inbox_persist_ms"),
+                                    node_persisted_at=ack.get("persisted_at"),
+                                )
                                 self._ack_count += 1
                                 if self.log_every and self._ack_count % self.log_every == 0:
                                     text = (
@@ -113,3 +132,10 @@ class ZmqDealerTransport:
     def _log(self, level: str, message: str, *args) -> None:
         if self.logger is not None:
             getattr(self.logger, level)(message, *args)
+
+    def _audit(self, event: str, **fields) -> None:
+        if self.audit_callback:
+            try:
+                self.audit_callback(event, **fields)
+            except Exception as exc:
+                self._log("warning", "frame transmission audit failed: %s", exc)

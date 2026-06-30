@@ -40,6 +40,12 @@ function makeAck(frame) {
         session_id: frame.session_id,
         stream_id: frame.stream_id,
         frame_seq: frame.frame_seq,
+        node_received_at: frame.node_received_at || null,
+        node_received_at_ms: frame.node_received_at_ms || null,
+        node_receive_diff_ms: frame.receive_diff_ms ?? null,
+        node_inbox_persist_ms: frame._timing
+            ? frame._timing.node_inbox_persist_ms
+            : null,
         persisted_at: new Date().toISOString(),
     });
 }

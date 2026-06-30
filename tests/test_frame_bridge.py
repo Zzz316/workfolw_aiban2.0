@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from core.frame_bridge.adapter import FrameAdapter
+from core.frame_bridge.audit import TransmissionAuditLogger
 from core.frame_bridge.bridge import FrameBridge, FrameBridgeConfig
 from core.frame_bridge.outbox import DurableOutbox
 from core.frame_bridge.protocol import (
@@ -165,6 +166,23 @@ class FrameBridgeBackpressureTests(unittest.TestCase):
                 time.sleep(0.02)
             self.assertTrue(any(call[2] for call in calls))
             bridge.stop()
+
+
+class TransmissionAuditTests(unittest.TestCase):
+    def test_audit_writes_jsonl_and_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            audit = TransmissionAuditLogger(directory, "test-run")
+            audit.record(
+                "sdk_received",
+                message_id="m1",
+                frame_seq=1,
+                labels=[{"label": "person", "confidence": 0.9}],
+            )
+            audit.close()
+            json_data = json.loads(Path(audit.jsonl_path).read_text(encoding="utf-8"))
+            text_data = Path(audit.text_path).read_text(encoding="utf-8")
+            self.assertEqual(json_data["event"], "sdk_received")
+            self.assertIn("message_id=m1", text_data)
 
 
 if __name__ == "__main__":
