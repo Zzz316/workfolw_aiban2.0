@@ -38,6 +38,13 @@ class ZmqDealerTransport:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        try:
+            import zmq  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "当前Python解释器未安装pyzmq，请执行: "
+                "{} -m pip install pyzmq==26.4.0".format(__import__("sys").executable)
+            ) from exc
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="frame-zmq-sender", daemon=True)
         self._thread.start()

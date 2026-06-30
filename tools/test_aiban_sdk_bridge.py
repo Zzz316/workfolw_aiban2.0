@@ -50,12 +50,29 @@ def parse_args():
         "--endpoint",
         default=os.getenv("AIBAN_FRAME_ENDPOINT", "tcp://127.0.0.1:5557"),
     )
+    parser.add_argument(
+        "--outbox",
+        default="",
+        help="测试outbox路径；默认按本次进程创建独立数据库",
+    )
     parser.add_argument("--print-every", type=int, default=1)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    print("当前Python解释器：{}".format(sys.executable), flush=True)
+    try:
+        import zmq
+        print("pyzmq版本：{}".format(zmq.__version__), flush=True)
+    except ImportError:
+        print(
+            "缺少pyzmq，请执行：{} -m pip install pyzmq==26.4.0".format(
+                sys.executable
+            ),
+            flush=True,
+        )
+        return 3
     sdk_home = str(Path(args.sdk_home))
     if sdk_home not in sys.path:
         sys.path.append(sdk_home)
@@ -74,10 +91,18 @@ def main():
     )
     logger = logging.getLogger("aiban-sdk-bridge-test")
     engine = AiBanVideoPy.aibanVideoGetInstance()
+    outbox_path = (
+        Path(args.outbox)
+        if args.outbox
+        else PROJECT_ROOT
+        / "data"
+        / "frame_bridge"
+        / "sdk-test-{}.db".format(os.getpid())
+    )
     config = FrameBridgeConfig(
         enabled=True,
         endpoint=args.endpoint,
-        outbox_path=str(PROJECT_ROOT / "data" / "frame_bridge" / "sdk-test-outbox.db"),
+        outbox_path=str(outbox_path),
         high_watermark=5000,
         low_watermark=1000,
         retry_seconds=0.5,
@@ -129,6 +154,7 @@ def main():
 
     bridge.start()
     print("Node-RED endpoint：{}".format(args.endpoint), flush=True)
+    print("本次测试outbox：{}".format(outbox_path), flush=True)
     print("SDK pipeline：{}".format(args.pipeline_config), flush=True)
     print("按 Ctrl+C 停止。", flush=True)
 
