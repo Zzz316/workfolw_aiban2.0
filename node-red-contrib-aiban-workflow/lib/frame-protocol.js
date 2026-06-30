@@ -53,7 +53,10 @@ function unpackEnvelope(envelope) {
     }
     const actual = crypto.createHash("sha256").update(envelope.payload, "utf8").digest("hex");
     if (actual !== envelope.checksum) throw new Error("invalid frame envelope checksum");
-    return JSON.parse(envelope.payload);
+    return {
+        frame: JSON.parse(envelope.payload),
+        sent_at_ms: Number(envelope.sent_at_ms || 0),
+    };
 }
 
 module.exports = {

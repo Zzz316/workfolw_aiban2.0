@@ -62,6 +62,8 @@ class FrameAdapterTests(unittest.TestCase):
         self.assertEqual(other["frame_seq"], 1)
         self.assertEqual(first["models"]["1"]["boxes"][0]["tracker_id"], 27)
         self.assertEqual(first["models"]["2"]["boxes"], [])
+        self.assertIsInstance(first["bridge_created_at_ms"], int)
+        self.assertGreaterEqual(first["sdk_convert_ms"], 0)
         self.assertTrue(verify_message(first))
 
     def test_exact_payload_envelope_detects_corruption(self):

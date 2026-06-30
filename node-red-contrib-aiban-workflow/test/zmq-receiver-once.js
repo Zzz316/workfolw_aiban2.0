@@ -16,7 +16,7 @@ async function main() {
     for await (const parts of socket) {
         const identity = parts[0];
         const envelope = JSON.parse(parts[parts.length - 1].toString("utf8"));
-        const frame = protocol.unpackEnvelope(envelope);
+        const frame = protocol.unpackEnvelope(envelope).frame;
         inbox.persist(frame);
         await socket.send([
             identity,

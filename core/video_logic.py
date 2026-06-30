@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import threading
 import time
@@ -9,7 +11,7 @@ sys_path_appended = False
 try:
     import sys
     # sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "AiBanWorkSpace"))
-    sys.path.append("D:/product/AiBanWorkSpace/")
+    sys.path.append(os.getenv("AIBAN_SDK_HOME", "D:/product/AiBanWorkSpace/"))
     import libAiBanVideoPy3_9 as AiBanVideoPy
     import libAiBanLitePy3_9 as AiBanLitePy
     

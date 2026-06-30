@@ -56,6 +56,8 @@ class FrameAdapter:
             return value
 
     def from_metadata(self, group_id: int, source_id: int, metadata: Any) -> Dict[str, Any]:
+        convert_started_ns = time.perf_counter_ns()
+        bridge_created_at_ms = int(time.time() * 1000)
         stream_id = "group-{}/source-{}".format(int(group_id), int(source_id))
         frame_seq = self._next_sequence(stream_id)
         models: Dict[str, Any] = {}
@@ -78,10 +80,14 @@ class FrameAdapter:
             "message_id": "{}:{}:{}".format(self.session_id, stream_id, frame_seq),
             "captured_at": str(sdk_time) if sdk_time else utc_now_iso(),
             "captured_monotonic_ns": time.monotonic_ns(),
+            "bridge_created_at_ms": bridge_created_at_ms,
             "group_id": int(group_id),
             "source_id": int(source_id),
             "models": models,
         }
+        message["sdk_convert_ms"] = round(
+            (time.perf_counter_ns() - convert_started_ns) / 1_000_000, 3
+        )
         return finalize_message(message)
 
     @staticmethod

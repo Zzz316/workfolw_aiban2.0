@@ -22,6 +22,8 @@ class FrameBridgeConfig:
     low_watermark: int = 1000
     retry_seconds: float = 1.0
     batch_size: int = 100
+    log_every: int = 1
+    console_latency: bool = True
 
     @classmethod
     def from_env(cls, project_root: str) -> "FrameBridgeConfig":
@@ -36,6 +38,10 @@ class FrameBridgeConfig:
             low_watermark=int(os.getenv("AIBAN_FRAME_LOW_WATERMARK", "1000")),
             retry_seconds=float(os.getenv("AIBAN_FRAME_RETRY_SECONDS", "1.0")),
             batch_size=int(os.getenv("AIBAN_FRAME_BATCH_SIZE", "100")),
+            log_every=int(os.getenv("AIBAN_FRAME_LOG_EVERY", "1")),
+            console_latency=os.getenv(
+                "AIBAN_FRAME_CONSOLE_LATENCY", "1"
+            ).strip().lower() in {"1", "true", "yes", "on"},
         )
 
 
@@ -57,6 +63,8 @@ class FrameBridge:
             identity="aiban-{}".format(self.adapter.session_id),
             retry_seconds=config.retry_seconds,
             batch_size=config.batch_size,
+            log_every=config.log_every,
+            console_latency=config.console_latency,
             logger=logger,
         )
         self._queue: Deque[Tuple[Dict, int, int]] = deque()

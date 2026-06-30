@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -54,14 +55,16 @@ def decode_message(data: bytes) -> Dict[str, Any]:
     return value
 
 
-def make_envelope(payload_text: str) -> Dict[str, Any]:
+def make_envelope(payload_text: str, sent_at_ms: int = None) -> Dict[str, Any]:
     """Wrap exact JSON text so receivers can verify bytes without re-encoding floats."""
-    return {
+    envelope = {
         "type": "frame_envelope",
         "schema_version": SCHEMA_VERSION,
         "payload": payload_text,
         "checksum": hashlib.sha256(payload_text.encode("utf-8")).hexdigest(),
     }
+    envelope["sent_at_ms"] = int(sent_at_ms if sent_at_ms is not None else time.time() * 1000)
+    return envelope
 
 
 def make_ack(frame: Dict[str, Any]) -> Dict[str, Any]:

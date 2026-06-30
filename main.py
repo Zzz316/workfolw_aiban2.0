@@ -16,6 +16,7 @@ import time
 import logging
 import threading
 import json
+import argparse
 from logging.handlers import TimedRotatingFileHandler
 from multiprocessing import Process, Queue, Pipe
 
@@ -180,10 +181,57 @@ def except_hook(cls, exception, traceback):
     global_sys_logger.error("Uncaught exception: %s", exception)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="AiBan Workflow 2.0 runtime")
+    parser.add_argument(
+        "--sdk-home",
+        default=os.getenv("AIBAN_SDK_HOME", "D:/product/AiBanWorkSpace"),
+        help="包含 libAiBanVideoPy3_9 的 AiBan SDK 目录",
+    )
+    parser.add_argument(
+        "--user-config",
+        default=os.getenv("AIBAN_USER_CONFIG", "D:/product/AiBanWorkSpace/config.ini"),
+    )
+    parser.add_argument(
+        "--pipeline-config",
+        default=os.getenv(
+            "AIBAN_PIPELINE_CONFIG",
+            "D:/product/AiBanWorkSpace/abvideo/main-flow.yaml",
+        ),
+    )
+    parser.add_argument("--no-v2-bridge", action="store_true")
+    parser.add_argument("--no-legacy-engine", action="store_true")
+    parser.add_argument(
+        "--latency-log-every",
+        type=int,
+        default=int(os.getenv("AIBAN_FRAME_LOG_EVERY", "1")),
+        help="每 N 帧在终端显示一次 ACK 耗时",
+    )
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
     from multiprocessing import freeze_support
     freeze_support()
     sys.excepthook = except_hook
+    args = parse_args()
+    os.environ["AIBAN_SDK_HOME"] = args.sdk_home
+    os.environ["AIBAN_USER_CONFIG"] = args.user_config
+    os.environ["AIBAN_PIPELINE_CONFIG"] = args.pipeline_config
+    os.environ["AIBAN_V2_BRIDGE_ENABLED"] = "0" if args.no_v2_bridge else "1"
+    os.environ["AIBAN_V1_ENGINE_ENABLED"] = "0" if args.no_legacy_engine else "1"
+    os.environ["AIBAN_FRAME_LOG_EVERY"] = str(max(1, args.latency_log_every))
+    os.environ.setdefault("AIBAN_FRAME_CONSOLE_LATENCY", "1")
+
+    print("AiBan Workflow 2.0 启动参数：", flush=True)
+    print("  SDK目录：{}".format(args.sdk_home), flush=True)
+    print("  Pipeline：{}".format(args.pipeline_config), flush=True)
+    print(
+        "  Node-RED桥：{}  旧引擎影子运行：{}".format(
+            not args.no_v2_bridge, not args.no_legacy_engine
+        ),
+        flush=True,
+    )
 
     global_sys_logger.info('=' * 60)
     global_sys_logger.info('AiBan System Starting...  pid=%d', os.getpid())
@@ -220,8 +268,8 @@ if __name__ == '__main__':
             alarm_queue,
             tool_io_queue,
             log_queue,                        # ← 新增
-            'D:/product/AiBanWorkSpace/config.ini',
-            'D:/product/AiBanWorkSpace/abvideo/main-flow.yaml'),
+            args.user_config,
+            args.pipeline_config),
     )
     video_proc.start()
     global_sys_logger.info("videowork started, pid=%d", video_proc.pid)

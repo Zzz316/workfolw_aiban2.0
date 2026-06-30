@@ -13,25 +13,32 @@ module.exports = function registerFrameInputNode(RED) {
         const inboxPath = path.isAbsolute(configuredPath)
             ? configuredPath
             : path.join(RED.settings.userDir, configuredPath);
+        const showLatency = config.showLatency !== false;
+        const logEvery = Math.max(1, Number(config.logEvery || 1));
+        let receivedCount = 0;
+        let latencyTotal = 0;
         let inbox;
         let socket;
         let closed = false;
 
+        function emitFrame(frame) {
+            node.send({
+                _msgid: frame.message_id,
+                topic: frame.stream_id,
+                payload: frame,
+                aiban: {
+                    message_id: frame.message_id,
+                    session_id: frame.session_id,
+                    stream_id: frame.stream_id,
+                    frame_seq: frame.frame_seq,
+                    timing: frame._timing || null,
+                },
+            });
+            inbox.markEmitted(frame.message_id);
+        }
+
         function emitPending() {
-            for (const item of inbox.pending(1000)) {
-                node.send({
-                    _msgid: item.message_id,
-                    topic: item.frame.stream_id,
-                    payload: item.frame,
-                    aiban: {
-                        message_id: item.message_id,
-                        session_id: item.frame.session_id,
-                        stream_id: item.frame.stream_id,
-                        frame_seq: item.frame.frame_seq,
-                    },
-                });
-                inbox.markEmitted(item.message_id);
-            }
+            for (const item of inbox.pending(1000)) emitFrame(item.frame);
         }
 
         async function run() {
@@ -49,23 +56,58 @@ module.exports = function registerFrameInputNode(RED) {
                     const identity = parts[0];
                     const body = parts[parts.length - 1];
                     try {
+                        const receivedAtMs = Date.now();
+                        const persistStarted = process.hrtime.bigint();
                         const envelope = JSON.parse(body.toString("utf8"));
-                        const frame = protocol.unpackEnvelope(envelope);
+                        const unpacked = protocol.unpackEnvelope(envelope);
+                        const frame = unpacked.frame;
                         if (frame.type !== "frame"
                             || frame.schema_version !== protocol.SCHEMA_VERSION) {
                             throw new Error("invalid frame protocol");
                         }
+                        const receiveTotalMs = frame.bridge_created_at_ms
+                            ? receivedAtMs - Number(frame.bridge_created_at_ms)
+                            : null;
+                        const wireMs = unpacked.sent_at_ms
+                            ? receivedAtMs - unpacked.sent_at_ms
+                            : null;
                         const inserted = inbox.persist(frame);
+                        const inboxPersistMs = Number(
+                            process.hrtime.bigint() - persistStarted
+                        ) / 1e6;
+                        frame._timing = {
+                            sdk_convert_ms: Number(frame.sdk_convert_ms || 0),
+                            python_to_node_ms: receiveTotalMs,
+                            wire_ms: wireMs,
+                            node_inbox_persist_ms: Number(inboxPersistMs.toFixed(3)),
+                            node_received_at_ms: receivedAtMs,
+                        };
                         await socket.send([
                             identity,
                             Buffer.from(JSON.stringify(protocol.makeAck(frame)), "utf8"),
                         ]);
-                        if (inserted) emitPending();
+                        if (inserted) {
+                            receivedCount += 1;
+                            if (receiveTotalMs !== null) latencyTotal += receiveTotalMs;
+                            emitFrame(frame);
+                            if (showLatency && receivedCount % logEvery === 0) {
+                                node.warn(
+                                    `[接收耗时] frame=${frame.frame_seq}`
+                                    + ` SDK转换=${frame._timing.sdk_convert_ms}ms`
+                                    + ` Python→Node=${receiveTotalMs}ms`
+                                    + ` 线上=${wireMs}ms`
+                                    + ` Inbox落盘=${frame._timing.node_inbox_persist_ms}ms`
+                                );
+                            }
+                        }
                         const counts = inbox.counts();
+                        const average = receivedCount
+                            ? (latencyTotal / receivedCount).toFixed(1)
+                            : "0.0";
                         node.status({
                             fill: counts.pending ? "yellow" : "green",
                             shape: "dot",
-                            text: `frames ${counts.total}, pending ${counts.pending}`,
+                            text: `本帧 ${receiveTotalMs ?? "-"}ms / 平均 ${average}ms`,
                         });
                     } catch (error) {
                         node.warn(`frame rejected: ${error.message}`);

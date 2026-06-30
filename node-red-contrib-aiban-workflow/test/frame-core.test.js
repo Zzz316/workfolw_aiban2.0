@@ -29,7 +29,7 @@ test("frame envelope validates exact payload", () => {
         payload,
         checksum: crypto.createHash("sha256").update(payload, "utf8").digest("hex"),
     };
-    assert.deepEqual(protocol.unpackEnvelope(envelope), frame());
+    assert.deepEqual(protocol.unpackEnvelope(envelope).frame, frame());
     envelope.payload += " ";
     assert.throws(() => protocol.unpackEnvelope(envelope), /checksum/);
 });

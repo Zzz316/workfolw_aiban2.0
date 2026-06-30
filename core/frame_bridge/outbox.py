@@ -87,15 +87,35 @@ class DurableOutbox:
             )
 
     def acknowledge(self, message_id: str) -> bool:
+        return self.acknowledge_details(message_id) is not None
+
+    def acknowledge_details(self, message_id: str) -> Optional[Dict]:
         with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT last_sent_at, send_count, created_at FROM frame_outbox "
+                "WHERE message_id = ? AND acked_at IS NULL",
+                (message_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            now = time.time()
             cursor = self._db.execute(
                 """
                 UPDATE frame_outbox SET acked_at = ?
                 WHERE message_id = ? AND acked_at IS NULL
                 """,
-                (time.time(), message_id),
+                (now, message_id),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return None
+            return {
+                "message_id": message_id,
+                "ack_rtt_ms": round(
+                    (now - float(row["last_sent_at"])) * 1000, 3
+                ) if row["last_sent_at"] is not None else None,
+                "delivery_ms": round((now - float(row["created_at"])) * 1000, 3),
+                "send_count": int(row["send_count"] or 0),
+            }
 
     def counts(self) -> Dict[str, int]:
         with self._lock:

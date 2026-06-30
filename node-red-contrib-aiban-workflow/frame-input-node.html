@@ -5,7 +5,9 @@
         defaults: {
             name: { value: "" },
             endpoint: { value: "tcp://127.0.0.1:5557", required: true },
-            inboxPath: { value: "data/frame_bridge/inbox.db", required: true }
+            inboxPath: { value: "data/frame_bridge/inbox.db", required: true },
+            showLatency: { value: true },
+            logEvery: { value: 1, required: true, validate: RED.validators.number() }
         },
         inputs: 0,
         outputs: 1,
@@ -26,6 +28,14 @@
     <div class="form-row">
         <label for="node-input-inboxPath">Inbox 路径</label>
         <input type="text" id="node-input-inboxPath" placeholder="data/frame_bridge/inbox.db">
+    </div>
+    <div class="form-row">
+        <label for="node-input-showLatency">显示耗时</label>
+        <input type="checkbox" id="node-input-showLatency" style="width:auto;">
+    </div>
+    <div class="form-row">
+        <label for="node-input-logEvery">每 N 帧记录</label>
+        <input type="number" id="node-input-logEvery" min="1">
     </div>
 </script>
 

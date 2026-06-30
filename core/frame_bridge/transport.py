@@ -19,6 +19,8 @@ class ZmqDealerTransport:
         identity: str,
         retry_seconds: float = 1.0,
         batch_size: int = 100,
+        log_every: int = 1,
+        console_latency: bool = False,
         logger=None,
     ):
         self.endpoint = endpoint
@@ -26,7 +28,10 @@ class ZmqDealerTransport:
         self.identity = identity
         self.retry_seconds = max(0.1, float(retry_seconds))
         self.batch_size = max(1, int(batch_size))
+        self.log_every = max(0, int(log_every))
+        self.console_latency = bool(console_latency)
         self.logger = logger
+        self._ack_count = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -73,7 +78,26 @@ class ZmqDealerTransport:
                             and verify_message(ack)
                             and isinstance(ack.get("message_id"), str)
                         ):
-                            self.outbox.acknowledge(ack["message_id"])
+                            details = self.outbox.acknowledge_details(ack["message_id"])
+                            if details:
+                                self._ack_count += 1
+                                if self.log_every and self._ack_count % self.log_every == 0:
+                                    text = (
+                                        "[FrameBridge延迟] message={} ACK往返={:.3f}ms "
+                                        "总投递={:.3f}ms 重发次数={}"
+                                    ).format(
+                                        details["message_id"],
+                                        details["ack_rtt_ms"] or 0.0,
+                                        details["delivery_ms"],
+                                        max(0, details["send_count"] - 1),
+                                    )
+                                    if self.console_latency:
+                                        print(text, flush=True)
+                                    self._log(
+                                        "info",
+                                        "%s",
+                                        text,
+                                    )
                     except Exception as exc:
                         self._log("warning", "invalid frame ACK: %s", exc)
         finally:
