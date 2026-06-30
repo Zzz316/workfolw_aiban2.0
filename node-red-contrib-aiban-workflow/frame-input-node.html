@@ -42,4 +42,7 @@
 <script type="text/html" data-help-name="aiban-frame-input">
     <p>接收 Python AiBan 帧桥数据。消息持久化到 SQLite inbox 后才返回 ACK。</p>
     <p><code>msg.payload</code> 为标准化帧，重复 message_id 不会重复输出。</p>
+    <p>标签与时间：<code>msg.payload.label_summary</code>、
+       <code>sdk_received_at</code>、<code>node_received_at</code>、
+       <code>receive_diff_ms</code>。</p>
 </script>

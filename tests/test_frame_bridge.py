@@ -63,6 +63,8 @@ class FrameAdapterTests(unittest.TestCase):
         self.assertEqual(first["models"]["1"]["boxes"][0]["tracker_id"], 27)
         self.assertEqual(first["models"]["2"]["boxes"], [])
         self.assertIsInstance(first["bridge_created_at_ms"], int)
+        self.assertIsInstance(first["sdk_received_at_ms"], int)
+        self.assertTrue(first["sdk_received_at"].endswith("+00:00"))
         self.assertGreaterEqual(first["sdk_convert_ms"], 0)
         self.assertTrue(verify_message(first))
 

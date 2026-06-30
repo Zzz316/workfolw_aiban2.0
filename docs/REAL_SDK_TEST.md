@@ -37,13 +37,14 @@ Use `--no-legacy-engine` after shadow comparison is complete.
 This does not start Flask, alarm processing, MySQL or the legacy workflow:
 
 ```powershell
-python tools/test_aiban_sdk_bridge.py --print-every 1
+python test_aiban_sdk_bridge.py --print-every 1
 ```
 
 It prints:
 
 ```text
-[SDK回调] ... 转换并入队=1.234ms
+[SDK接收] 时间=2026-06-30T02:00:00.123+00:00 group=1 source=1
+frame=1 标签=[m1:person(0.950)] 转换并入队=1.234ms
 [FrameBridge延迟] ... ACK往返=2.345ms 总投递=5.678ms
 ```
 
@@ -58,6 +59,11 @@ msg.payload._timing.sdk_convert_ms
 msg.payload._timing.python_to_node_ms
 msg.payload._timing.wire_ms
 msg.payload._timing.node_inbox_persist_ms
+msg.payload.labels
+msg.payload.label_summary
+msg.payload.sdk_received_at
+msg.payload.node_received_at
+msg.payload.receive_diff_ms
 ```
 
 Interpretation:

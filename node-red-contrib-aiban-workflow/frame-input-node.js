@@ -17,6 +17,27 @@ module.exports = function registerFrameInputNode(RED) {
         const logEvery = Math.max(1, Number(config.logEvery || 1));
         let receivedCount = 0;
         let latencyTotal = 0;
+
+        function collectLabels(frame) {
+            const labels = [];
+            for (const [modelId, result] of Object.entries(frame.models || {})) {
+                for (const box of (result && result.boxes) || []) {
+                    labels.push({
+                        model_id: String(modelId),
+                        label: String(box.label || ""),
+                        confidence: Number(box.confidence || 0),
+                    });
+                }
+            }
+            return labels;
+        }
+
+        function formatLabels(labels) {
+            if (!labels.length) return "无标签";
+            return labels.map((item) =>
+                `m${item.model_id}:${item.label}(${item.confidence.toFixed(3)})`
+            ).join(", ");
+        }
         let inbox;
         let socket;
         let closed = false;
@@ -82,6 +103,13 @@ module.exports = function registerFrameInputNode(RED) {
                             node_inbox_persist_ms: Number(inboxPersistMs.toFixed(3)),
                             node_received_at_ms: receivedAtMs,
                         };
+                        frame.labels = collectLabels(frame);
+                        frame.label_summary = formatLabels(frame.labels);
+                        frame.node_received_at = new Date(receivedAtMs).toISOString();
+                        frame.node_received_at_ms = receivedAtMs;
+                        frame.receive_diff_ms = frame.sdk_received_at_ms
+                            ? receivedAtMs - Number(frame.sdk_received_at_ms)
+                            : null;
                         await socket.send([
                             identity,
                             Buffer.from(JSON.stringify(protocol.makeAck(frame)), "utf8"),
@@ -92,7 +120,11 @@ module.exports = function registerFrameInputNode(RED) {
                             emitFrame(frame);
                             if (showLatency && receivedCount % logEvery === 0) {
                                 node.warn(
-                                    `[接收耗时] frame=${frame.frame_seq}`
+                                    `[Node-RED接收] 时间=${frame.node_received_at}`
+                                    + ` group=${frame.group_id} source=${frame.source_id}`
+                                    + ` frame=${frame.frame_seq}`
+                                    + ` 标签=[${frame.label_summary}]`
+                                    + ` 与SDK接收时间差=${frame.receive_diff_ms}ms`
                                     + ` SDK转换=${frame._timing.sdk_convert_ms}ms`
                                     + ` Python→Node=${receiveTotalMs}ms`
                                     + ` 线上=${wireMs}ms`
