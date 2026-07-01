@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,7 @@ class ZmqDealerTransport:
         console_latency: bool = False,
         audit_callback: Optional[Callable[..., None]] = None,
         logger=None,
+        on_message: Optional[Callable[..., None]] = None,
     ):
         self.endpoint = endpoint
         self.outbox = outbox
@@ -34,9 +36,11 @@ class ZmqDealerTransport:
         self.console_latency = bool(console_latency)
         self.audit_callback = audit_callback
         self.logger = logger
+        self.on_message = on_message
         self._ack_count = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._send_queue: queue.SimpleQueue = queue.SimpleQueue()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -56,6 +60,13 @@ class ZmqDealerTransport:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout)
+
+    def send_message(self, message: dict) -> None:
+        """Enqueue an outbound control message (e.g. screenshot result).
+
+        Thread-safe -- may be called from any thread.
+        """
+        self._send_queue.put(canonical_json(message).encode("utf-8"))
 
     def _run(self) -> None:
         try:
@@ -87,27 +98,36 @@ class ZmqDealerTransport:
                         send_count=int(row["send_count"] or 0) + 1,
                     )
 
+                # drain outgoing control messages (screenshot results, etc.)
+                while True:
+                    try:
+                        data = self._send_queue.get_nowait()
+                        socket.send(data)
+                    except queue.Empty:
+                        break
+
                 events = dict(poller.poll(100))
                 if socket in events:
                     try:
-                        ack = json.loads(socket.recv().decode("utf-8"))
+                        raw = socket.recv()
+                        msg = json.loads(raw.decode("utf-8"))
                         if (
-                            ack.get("type") == "ack"
-                            and verify_message(ack)
-                            and isinstance(ack.get("message_id"), str)
+                            msg.get("type") == "ack"
+                            and verify_message(msg)
+                            and isinstance(msg.get("message_id"), str)
                         ):
-                            details = self.outbox.acknowledge_details(ack["message_id"])
+                            details = self.outbox.acknowledge_details(msg["message_id"])
                             if details:
                                 self._audit(
                                     "node_ack_received",
                                     **details,
-                                    stream_id=ack.get("stream_id"),
-                                    frame_seq=ack.get("frame_seq"),
-                                    node_received_at=ack.get("node_received_at"),
-                                    node_received_at_ms=ack.get("node_received_at_ms"),
-                                    node_receive_diff_ms=ack.get("node_receive_diff_ms"),
-                                    node_inbox_persist_ms=ack.get("node_inbox_persist_ms"),
-                                    node_persisted_at=ack.get("persisted_at"),
+                                    stream_id=msg.get("stream_id"),
+                                    frame_seq=msg.get("frame_seq"),
+                                    node_received_at=msg.get("node_received_at"),
+                                    node_received_at_ms=msg.get("node_received_at_ms"),
+                                    node_receive_diff_ms=msg.get("node_receive_diff_ms"),
+                                    node_inbox_persist_ms=msg.get("node_inbox_persist_ms"),
+                                    node_persisted_at=msg.get("persisted_at"),
                                 )
                                 self._ack_count += 1
                                 if self.log_every and self._ack_count % self.log_every == 0:
@@ -115,13 +135,13 @@ class ZmqDealerTransport:
                                     delivery = details["delivery_ms"]
                                     ack_rtt = details.get("ack_rtt_ms") or 0.0
                                     node_persist = (
-                                        float(ack.get("node_inbox_persist_ms", 0) or 0)
+                                        float(msg.get("node_inbox_persist_ms", 0) or 0)
                                     )
                                     py_side = max(0, delivery - ack_rtt - node_persist)
-                                    node_diff = ack.get("node_receive_diff_ms")
+                                    node_diff = msg.get("node_receive_diff_ms")
                                     resend = max(0, details["send_count"] - 1)
-                                    seq = ack.get("frame_seq", "?")
-                                    stream = ack.get("stream_id", "?")
+                                    seq = msg.get("frame_seq", "?")
+                                    stream = msg.get("stream_id", "?")
                                     now_beijing = datetime.now(BEIJING_TZ).strftime(
                                         "%H:%M:%S"
                                     )
@@ -153,6 +173,9 @@ class ZmqDealerTransport:
                                     if self.console_latency:
                                         print(text, flush=True)
                                     self._log("info", "%s", text)
+                        elif self.on_message is not None:
+                            # dispatch control messages (screenshot_request, etc.)
+                            self.on_message(msg)
                     except Exception as exc:
                         self._log("warning", "invalid frame ACK: %s", exc)
         finally:

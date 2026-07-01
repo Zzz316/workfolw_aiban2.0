@@ -429,7 +429,7 @@ module.exports = {
         //tours: false,
 
         page: {
-            css: path.join(__dirname, "custom-theme.css"),
+            //css: path.join(__dirname, "custom-theme.css"),
 			title: "iCamera逻辑编排引擎", // 在这里修改浏览器网页标签的名称
         },
 		

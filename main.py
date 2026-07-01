@@ -141,6 +141,73 @@ def start_flask():
         # 需要 request 对象
         from flask import request
 
+        # ── FrameBridge 运行统计 ───────────────────────────────
+        _stats_file = os.environ.get(
+            "AIBAN_FRAME_STATS_FILE",
+            os.path.join(BASE_DIR, "data", "frame_bridge", "stats.json"),
+        )
+
+        @app.route('/aiban/bridge/stats', methods=['GET'])
+        def bridge_stats():
+            """返回 FrameBridge 运行统计（由 videowork 子进程定期写入）。"""
+            try:
+                if not os.path.exists(_stats_file):
+                    return {
+                        "status": "503",
+                        "errmsg": "统计文件尚未生成，请确认 bridge 已启用并运行中",
+                        "data": None,
+                    }, 503
+                with open(_stats_file, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                return {"status": "200", "errmsg": "", "data": data}, 200
+            except json.JSONDecodeError:
+                return {"status": "500", "errmsg": "统计文件格式错误"}, 500
+            except Exception as exc:
+                global_sys_logger.exception("读取 bridge stats 失败: %s", exc)
+                return {"status": "500", "errmsg": str(exc)}, 500
+
+        @app.route('/aiban/bridge/health', methods=['GET'])
+        def bridge_health():
+            """快速健康检查：stats 文件最后更新时间是否在 30 秒内。"""
+            try:
+                if not os.path.exists(_stats_file):
+                    return {
+                        "status": "503",
+                        "healthy": False,
+                        "reason": "no_stats_file",
+                    }, 503
+                with open(_stats_file, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                updated = data.get("updated_at", "")
+                if updated:
+                    from datetime import datetime, timedelta, timezone
+                    BEIJING = timezone(timedelta(hours=8))
+                    dt = datetime.fromisoformat(updated)
+                    age = (datetime.now(BEIJING) - dt).total_seconds()
+                    if age > 30:
+                        return {
+                            "status": "503",
+                            "healthy": False,
+                            "reason": "stale_stats",
+                            "age_seconds": round(age, 1),
+                        }, 503
+                    return {
+                        "status": "200",
+                        "healthy": True,
+                        "age_seconds": round(age, 1),
+                    }, 200
+                return {
+                    "status": "200",
+                    "healthy": True,
+                    "age_seconds": 0,
+                }, 200
+            except Exception as exc:
+                return {
+                    "status": "500",
+                    "healthy": False,
+                    "reason": str(exc),
+                }, 500
+
         flask_logger.info("Flask starting on %s:%s", SERVER_HOST, SERVER_PORT)
         global_sys_logger.info("Flask starting on %s:%s", SERVER_HOST, SERVER_PORT)
         app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, threaded=True)
@@ -222,6 +289,10 @@ if __name__ == '__main__':
     os.environ["AIBAN_V1_ENGINE_ENABLED"] = "0" if args.no_legacy_engine else "1"
     os.environ["AIBAN_FRAME_LOG_EVERY"] = str(max(1, args.latency_log_every))
     os.environ.setdefault("AIBAN_FRAME_CONSOLE_LATENCY", "1")
+    os.environ.setdefault(
+        "AIBAN_FRAME_STATS_FILE",
+        os.path.join(BASE_DIR, "data", "frame_bridge", "stats.json"),
+    )
 
     print("AiBan Workflow 2.0 启动参数：", flush=True)
     print("  SDK目录：{}".format(args.sdk_home), flush=True)

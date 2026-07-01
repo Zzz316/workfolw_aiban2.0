@@ -8,150 +8,36 @@
         "env": []
     },
     {
-        "id": "6632378a0d41cac6",
-        "type": "inject",
+        "id": "6a1b3184c39b5840",
+        "type": "aiban-frame-input",
         "z": "28c978f12126f179",
         "name": "",
-        "props": [
-            {
-                "p": "payload"
-            },
-            {
-                "p": "topic",
-                "vt": "str"
-            }
-        ],
-        "repeat": "",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "",
-        "payload": "",
-        "payloadType": "date",
-        "x": 350,
-        "y": 200,
+        "endpoint": "tcp://127.0.0.1:5557",
+        "inboxPath": "data/frame_bridge/inbox.db",
+        "showLatency": true,
+        "logEvery": "",
+        "x": 470,
+        "y": 280,
         "wires": [
             [
-                "35713e3b0a8a2386"
+                "36e56b4f4c238002"
             ]
         ]
     },
     {
-        "id": "35713e3b0a8a2386",
-        "type": "workflow-sequence",
+        "id": "36e56b4f4c238002",
+        "type": "debug",
         "z": "28c978f12126f179",
-        "name": "步骤顺序检测",
-        "groupId": "1",
-        "modelId": "1",
-        "ordered": false,
-        "timeout": 999999,
-        "alarmMsg": "",
-        "cooldown": 10,
-        "saveResult": true,
-        "resultTable": "icamera_data.icam_alarm_data",
-        "okAlarmName": "流程OK",
-        "steps": [
-            {
-                "id": "step1",
-                "label": "插接1",
-                "confidence": 0.8,
-                "duration": 2,
-                "alarm_name": "排线漏插-插接1"
-            },
-            {
-                "id": "step2",
-                "label": "插接2",
-                "confidence": 0.8,
-                "duration": 2,
-                "alarm_name": "排线漏插-插接2"
-            },
-            {
-                "id": "step3",
-                "label": "插接3",
-                "confidence": 0.8,
-                "duration": 2,
-                "alarm_name": "排线漏插-插接3"
-            },
-            {
-                "id": "step4",
-                "label": "end",
-                "confidence": 0.8,
-                "duration": 2,
-                "end": true
-            }
-        ],
-        "_groupCameraMap": {
-            "1": [
-                1
-            ]
-        },
-        "_modelMap": {
-            "1": {
-                "modelName": "huayang-2",
-                "labels": [
-                    "end",
-                    "插接1",
-                    "插接2",
-                    "插接3"
-                ]
-            }
-        },
-        "x": 580,
-        "y": 200,
-        "wires": [
-            [
-                "9c455450efbf47f1"
-            ]
-        ]
-    },
-    {
-        "id": "9c455450efbf47f1",
-        "type": "join",
-        "z": "28c978f12126f179",
-        "name": "",
-        "mode": "custom",
-        "build": "array",
-        "property": "payload",
-        "propertyType": "msg",
-        "key": "topic",
-        "joiner": "\\n",
-        "joinerType": "str",
-        "useparts": false,
-        "accumulate": false,
-        "timeout": "",
-        "count": "1",
-        "reduceRight": false,
-        "reduceExp": "",
-        "reduceInit": "",
-        "reduceInitType": "",
-        "reduceFixup": "",
-        "x": 810,
-        "y": 200,
-        "wires": [
-            [
-                "8fcf57f5b75f8166"
-            ]
-        ]
-    },
-    {
-        "id": "8fcf57f5b75f8166",
-        "type": "workflow-exporter",
-        "z": "28c978f12126f179",
-        "name": "生成引擎配置",
-        "exportPath": "D:/workfolw_aiban/workflows",
-        "dbHost": "127.0.0.1",
-        "dbPort": 3306,
-        "dbUser": "root",
-        "dbPassword": "root",
-        "dbCharset": "GB2312",
-        "dbTable": "icamera_data.icam_alarm_data",
-        "socketHost": "",
-        "socketPort": 10000,
-        "socketEncoding": "gbk",
-        "x": 1020,
-        "y": 200,
-        "wires": [
-            []
-        ]
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 700,
+        "y": 160,
+        "wires": []
     }
 ]

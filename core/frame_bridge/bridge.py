@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
-from typing import Callable, Deque, Dict, Optional, Tuple
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Deque, Dict, Optional, Tuple
 
 from .adapter import FrameAdapter
 from .outbox import DurableOutbox
+from .protocol import beijing_now_iso
 from .transport import ZmqDealerTransport
 
 
@@ -25,6 +29,9 @@ class FrameBridgeConfig:
     batch_size: int = 100
     log_every: int = 1
     console_latency: bool = True
+    disk_emergency_percent: int = 95
+    screenshot_timeout_seconds: float = 30.0
+    stats_file: str = ""
 
     @classmethod
     def from_env(cls, project_root: str) -> "FrameBridgeConfig":
@@ -43,6 +50,13 @@ class FrameBridgeConfig:
             console_latency=os.getenv(
                 "AIBAN_FRAME_CONSOLE_LATENCY", "1"
             ).strip().lower() in {"1", "true", "yes", "on"},
+            disk_emergency_percent=int(
+                os.getenv("AIBAN_FRAME_DISK_EMERGENCY_PERCENT", "95")
+            ),
+            screenshot_timeout_seconds=float(
+                os.getenv("AIBAN_FRAME_SCREENSHOT_TIMEOUT", "30.0")
+            ),
+            stats_file=os.getenv("AIBAN_FRAME_STATS_FILE", ""),
         )
 
 
@@ -53,11 +67,15 @@ class FrameBridge:
         source_control: Optional[Callable[[int, int, bool], bool]] = None,
         audit_callback: Optional[Callable[..., None]] = None,
         logger=None,
+        screenshot_manager=None,
     ):
         self.config = config
         self.source_control = source_control
         self.audit_callback = audit_callback
         self.logger = logger
+        self.screenshot_manager = screenshot_manager
+        self._start_time = time.monotonic()
+        self._disk_stats: Dict[str, Any] = {}
         self.adapter = FrameAdapter()
         self.outbox = DurableOutbox(config.outbox_path)
         self.transport = ZmqDealerTransport(
@@ -70,6 +88,7 @@ class FrameBridge:
             console_latency=config.console_latency,
             audit_callback=audit_callback,
             logger=logger,
+            on_message=self._handle_control_message if screenshot_manager else None,
         )
         self._queue: Deque[Tuple[Dict, int, int]] = deque()
         self._condition = threading.Condition()
@@ -113,11 +132,23 @@ class FrameBridge:
     def stats(self) -> Dict:
         with self._condition:
             ingress = len(self._queue)
+            paused = sorted("{}/{}".format(g, s) for g, s in self._paused)
         return {
             "session_id": self.adapter.session_id,
-            "ingress_pending": ingress,
-            "paused_sources": sorted("{}/{}".format(g, s) for g, s in self._paused),
+            "uptime_seconds": round(time.monotonic() - self._start_time, 1),
+            "ingress": {
+                "pending": ingress,
+                "paused_sources": paused,
+            },
             "outbox": self.outbox.counts(),
+            "transport": {
+                "endpoint": self.config.endpoint,
+                "acks_received": self.transport._ack_count,
+            },
+            "disk": dict(self._disk_stats),
+            "screenshot": (
+                self.screenshot_manager.stats() if self.screenshot_manager else {}
+            ),
         }
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -165,6 +196,7 @@ class FrameBridge:
                 continue
 
     def _control_loop(self) -> None:
+        iteration = 0
         while True:
             with self._condition:
                 if self._stop:
@@ -183,6 +215,48 @@ class FrameBridge:
                 and outbox_pending <= self.config.low_watermark
             ):
                 self._resume_sources()
+
+            iteration += 1
+            # disk check every ~2 seconds (10 iterations)
+            if iteration % 10 == 0:
+                self._check_disk()
+                if self._disk_stats.get("emergency"):
+                    with self._condition:
+                        all_sources = list(self._active_sources)
+                    for key in all_sources:
+                        self._pause_source(*key)
+
+            # screenshot timeout check
+            if self.screenshot_manager:
+                timed_out = self.screenshot_manager.check_timeouts()
+                for request_id, gid, sid in timed_out:
+                    try:
+                        from .protocol import make_screenshot_timeout
+                        self.transport.send_message(
+                            make_screenshot_timeout(request_id, gid, sid)
+                        )
+                    except Exception:
+                        if self.logger:
+                            self.logger.exception(
+                                "failed to send screenshot timeout for %s", request_id
+                            )
+
+            # stats file write every ~1 second (5 iterations)
+            if self.config.stats_file and iteration % 5 == 0:
+                try:
+                    stats_path = Path(self.config.stats_file)
+                    stats_path.parent.mkdir(parents=True, exist_ok=True)
+                    data = self.stats()
+                    data["updated_at"] = beijing_now_iso()
+                    tmp_path = stats_path.with_suffix(".tmp")
+                    tmp_path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    tmp_path.replace(stats_path)
+                except Exception:
+                    pass  # never let stats writing crash the bridge
+
             threading.Event().wait(0.2)
 
     def _audit(self, event: str, **fields) -> None:
@@ -229,3 +303,43 @@ class FrameBridge:
                         self.logger.exception("failed to resume video source %s/%s", *key)
                     continue
             self._paused.discard(key)
+
+    def _check_disk(self) -> None:
+        """Check disk usage on the filesystem containing the outbox."""
+        try:
+            outbox_dir = os.path.dirname(self.config.outbox_path) or "."
+            usage = shutil.disk_usage(outbox_dir)
+            percent_used = (usage.total - usage.free) / usage.total * 100.0
+            self._disk_stats = {
+                "path": outbox_dir,
+                "total_bytes": usage.total,
+                "used_bytes": usage.used,
+                "free_bytes": usage.free,
+                "percent_used": round(percent_used, 2),
+                "emergency": percent_used >= self.config.disk_emergency_percent,
+            }
+            if self._disk_stats["emergency"]:
+                if self.logger:
+                    self.logger.error(
+                        "disk emergency: %.1f%% used (threshold %d%%), "
+                        "pausing all sources",
+                        percent_used,
+                        self.config.disk_emergency_percent,
+                    )
+        except OSError as exc:
+            if self.logger:
+                self.logger.warning("disk check failed: %s", exc)
+
+    def _handle_control_message(self, msg: Dict) -> None:
+        """Dispatch incoming control messages from Node-RED (non-ACK)."""
+        if (
+            msg.get("type") == "screenshot_request"
+            and self.screenshot_manager
+            and isinstance(msg.get("request_id"), str)
+        ):
+            self.screenshot_manager.enqueue_request(
+                request_id=msg["request_id"],
+                group_id=int(msg.get("group_id", 0)),
+                source_id=int(msg.get("source_id", 0)),
+                save_roi=bool(msg.get("save_roi", False)),
+            )

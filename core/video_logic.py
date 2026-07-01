@@ -20,7 +20,8 @@ except Exception:
     pass
 
 from core.infra import global_sys_logger, alam_msg, api_trigger_logger
-from core.frame_bridge import FrameBridge, FrameBridgeConfig
+from core.frame_bridge import FrameBridge, FrameBridgeConfig, ScreenshotManager
+from core.frame_bridge.protocol import make_screenshot_result
 from core.workflow_engine import WorkflowEngine
 
 # workflows/ 目录位于项目根
@@ -51,15 +52,21 @@ class AibanVideoProcess:
         self._api_server_thread = None
         self._api_server_address = None
         self._bridge = None
+        self._screenshot_manager = None
         self._bridge_config = FrameBridgeConfig.from_env(_PROJECT_ROOT)
         self._legacy_engine_enabled = os.getenv(
             "AIBAN_V1_ENGINE_ENABLED", "1"
         ).strip().lower() in {"1", "true", "yes", "on"}
         if self._bridge_config.enabled:
+            self._screenshot_manager = ScreenshotManager(
+                request_ttl_seconds=self._bridge_config.screenshot_timeout_seconds,
+                logger=global_sys_logger,
+            )
             self._bridge = FrameBridge(
                 self._bridge_config,
                 source_control=self.videoinstance.sourceControl,
                 logger=global_sys_logger,
+                screenshot_manager=self._screenshot_manager,
             )
         self._start_api_server_if_needed()
         self._watcher = threading.Thread(target=self._workflow_watcher, name="workflow-watcher", daemon=True)
@@ -177,6 +184,11 @@ class AibanVideoProcess:
             self.videoinstance.registerVideoMsgEventFunc(self._video_msg_event_callback)
         except Exception as ee:
             global_sys_logger.warning("registerVideoMsgEventFunc 不可用: %s", ee)
+        # register save-image callback BEFORE buildPipline (SDK requirement)
+        try:
+            self.videoinstance.registerVideoSaveImageFunc(self._on_save_image)
+        except Exception as ee:
+            global_sys_logger.warning("registerVideoSaveImageFunc 不可用: %s", ee)
         if self._bridge:
             self._bridge.start()
             global_sys_logger.info(
@@ -246,6 +258,35 @@ class AibanVideoProcess:
     def aibanvideometadataresult_callback(self, err: bool, groupid: int, sourceid: int, metadata: AiBanVideoPy.IAibanVideoMetaData):
         try:
             if not err:
+                # handle pending screenshot requests before the bridge
+                # converts the metadata (which destroys the live object)
+                if self._screenshot_manager and self._screenshot_manager.has_pending(
+                    groupid, sourceid
+                ):
+                    for req in self._screenshot_manager.dequeue_pending(
+                        groupid, sourceid
+                    ):
+                        try:
+                            metadata.saveImage(req.save_roi)
+                        except Exception as se:
+                            global_sys_logger.warning(
+                                "screenshot saveImage failed for %s: %s",
+                                req.request_id,
+                                se,
+                            )
+                            req_id = self._screenshot_manager.record_error(
+                                groupid, sourceid
+                            )
+                            if req_id:
+                                self._bridge.transport.send_message(
+                                    make_screenshot_result(
+                                        req_id,
+                                        groupid,
+                                        sourceid,
+                                        success=False,
+                                        error=str(se),
+                                    )
+                                )
                 if self._bridge:
                     self._bridge.submit_metadata(groupid, sourceid, metadata)
                 if self._legacy_engine_enabled:
@@ -267,3 +308,29 @@ class AibanVideoProcess:
                 global_sys_logger.warning("[AiBanVideo] type=%s status=%s msg=%s", msg_type, status, text)
         except Exception as ee:
             global_sys_logger.exception("video msg event handler error: %s", ee)
+
+    def _on_save_image(self, groupid: int, sourceid: int, filepath: str, cvmat):
+        """SDK 截图完成回调。匹配到待处理请求后通过 frame bridge 发回 Node-RED。"""
+        try:
+            if not self._screenshot_manager or not self._bridge:
+                return
+            request_id = None
+            if filepath:
+                request_id = self._screenshot_manager.complete(
+                    groupid, sourceid, str(filepath)
+                )
+            else:
+                request_id = self._screenshot_manager.record_error(groupid, sourceid)
+            if request_id:
+                self._bridge.transport.send_message(
+                    make_screenshot_result(
+                        request_id,
+                        groupid,
+                        sourceid,
+                        success=bool(filepath),
+                        filepath=str(filepath) if filepath else "",
+                        error="" if filepath else "save failed: empty path",
+                    )
+                )
+        except Exception as ee:
+            global_sys_logger.exception("_on_save_image error: %s", ee)

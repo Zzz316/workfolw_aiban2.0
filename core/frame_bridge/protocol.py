@@ -87,3 +87,43 @@ def make_ack(frame: Dict[str, Any]) -> Dict[str, Any]:
             "persisted_at": beijing_now_iso(),
         }
     )
+
+
+def make_screenshot_result(
+    request_id: str,
+    group_id: int,
+    source_id: int,
+    success: bool,
+    filepath: str = "",
+    error: str = "",
+) -> Dict[str, Any]:
+    """Build a screenshot_result message for delivery back to Node-RED."""
+    return finalize_message(
+        {
+            "type": "screenshot_result",
+            "schema_version": SCHEMA_VERSION,
+            "request_id": request_id,
+            "group_id": int(group_id),
+            "source_id": int(source_id),
+            "success": bool(success),
+            "filepath": str(filepath),
+            "error": str(error) if error else None,
+            "completed_at": beijing_now_iso(),
+        }
+    )
+
+
+def make_screenshot_timeout(
+    request_id: str, group_id: int, source_id: int
+) -> Dict[str, Any]:
+    """Build a screenshot_timeout notification for Node-RED."""
+    return finalize_message(
+        {
+            "type": "screenshot_timeout",
+            "schema_version": SCHEMA_VERSION,
+            "request_id": request_id,
+            "group_id": int(group_id),
+            "source_id": int(source_id),
+            "timeout_at": beijing_now_iso(),
+        }
+    )

@@ -124,6 +124,8 @@ class DurableOutboxTests(unittest.TestCase):
 
 
 class FakeTransport:
+    _ack_count: int = 0
+
     def start(self):
         pass
 
@@ -217,6 +219,151 @@ class TransmissionAuditTests(unittest.TestCase):
             self.assertIn("person", text_data)
             self.assertIn("完整投递(ms)", summary_data)
             self.assertIn("优秀", summary_data)
+
+
+class ScreenshotManagerTests(unittest.TestCase):
+    def test_enqueue_and_dequeue_pending(self):
+        from core.frame_bridge.screenshot_service import ScreenshotManager
+        mgr = ScreenshotManager()
+        mgr.enqueue_request("req-1", 1, 2, save_roi=False)
+        self.assertTrue(mgr.has_pending(1, 2))
+        self.assertFalse(mgr.has_pending(1, 3))
+        pending = mgr.dequeue_pending(1, 2)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].request_id, "req-1")
+        self.assertFalse(mgr.has_pending(1, 2))
+
+    def test_fifo_matching_on_complete(self):
+        from core.frame_bridge.screenshot_service import ScreenshotManager
+        mgr = ScreenshotManager()
+        mgr.enqueue_request("req-a", 1, 1)
+        mgr.enqueue_request("req-b", 1, 1)
+        pending = mgr.dequeue_pending(1, 1)
+        self.assertEqual(len(pending), 2)
+        # complete in order
+        rid1 = mgr.complete(1, 1, "/tmp/a.jpg")
+        rid2 = mgr.complete(1, 1, "/tmp/b.jpg")
+        self.assertEqual(rid1, "req-a")
+        self.assertEqual(rid2, "req-b")
+
+    def test_timeout_expires_in_flight(self):
+        from core.frame_bridge.screenshot_service import ScreenshotManager
+        import time as time_module
+        mgr = ScreenshotManager(request_ttl_seconds=0.1)
+        mgr.enqueue_request("req-t", 1, 1)
+        mgr.dequeue_pending(1, 1)  # moves to in_flight
+        time_module.sleep(0.3)  # well past TTL
+        expired = mgr.check_timeouts()
+        self.assertEqual(len(expired), 1)
+        self.assertEqual(expired[0][0], "req-t")
+
+    def test_complete_with_no_in_flight_returns_none(self):
+        from core.frame_bridge.screenshot_service import ScreenshotManager
+        mgr = ScreenshotManager()
+        self.assertIsNone(mgr.complete(1, 1, "/tmp/x.jpg"))
+
+    def test_stats_reflects_state(self):
+        from core.frame_bridge.screenshot_service import ScreenshotManager
+        mgr = ScreenshotManager()
+        mgr.enqueue_request("r1", 1, 1)
+        mgr.enqueue_request("r2", 1, 2)
+        stats = mgr.stats()
+        self.assertEqual(stats["pending"], 2)
+        self.assertEqual(stats["in_flight"], 0)
+        mgr.dequeue_pending(1, 1)
+        stats = mgr.stats()
+        self.assertEqual(stats["pending"], 1)
+        self.assertEqual(stats["in_flight"], 1)
+        mgr.complete(1, 1, "/tmp/x.jpg")
+        stats = mgr.stats()
+        self.assertEqual(stats["completed"], 1)
+
+    def test_record_error_fifo_matching(self):
+        from core.frame_bridge.screenshot_service import ScreenshotManager
+        mgr = ScreenshotManager()
+        mgr.enqueue_request("req-err", 1, 1)
+        mgr.dequeue_pending(1, 1)
+        rid = mgr.record_error(1, 1)
+        self.assertEqual(rid, "req-err")
+        self.assertEqual(mgr.stats()["errors"], 1)
+
+
+class FrameBridgeStatsFileTests(unittest.TestCase):
+    def test_stats_file_is_written(self):
+        import json
+        import tempfile
+        import time as time_module
+        from pathlib import Path
+        from core.frame_bridge.bridge import FrameBridge, FrameBridgeConfig
+
+        with tempfile.TemporaryDirectory() as directory:
+            stats_path = str(Path(directory) / "stats.json")
+            bridge = FrameBridge(
+                FrameBridgeConfig(
+                    enabled=True,
+                    outbox_path=str(Path(directory) / "outbox.db"),
+                    high_watermark=100,
+                    low_watermark=1,
+                    stats_file=stats_path,
+                ),
+            )
+            bridge.transport = FakeTransport()
+            bridge.start()
+            deadline = time_module.time() + 3
+            found = False
+            while time_module.time() < deadline:
+                if Path(stats_path).exists():
+                    found = True
+                    break
+                time_module.sleep(0.1)
+            bridge.stop()
+            self.assertTrue(found, "stats file should be written within 3 seconds")
+            data = json.loads(Path(stats_path).read_text(encoding="utf-8"))
+            self.assertIn("session_id", data)
+            self.assertIn("uptime_seconds", data)
+            self.assertIn("ingress", data)
+            self.assertIn("outbox", data)
+            self.assertIn("transport", data)
+            self.assertIn("disk", data)
+            self.assertIn("screenshot", data)
+            self.assertIn("updated_at", data)
+
+
+class FrameBridgeDiskMonitorTests(unittest.TestCase):
+    def test_disk_check_is_non_fatal_on_missing_path(self):
+        from core.frame_bridge.bridge import FrameBridge, FrameBridgeConfig
+        bridge = FrameBridge(
+            FrameBridgeConfig(
+                enabled=True,
+                outbox_path="/nonexistent/path/should/not/crash/outbox.db",
+                high_watermark=100,
+                low_watermark=1,
+                disk_emergency_percent=0,  # always trigger
+            ),
+        )
+        bridge.transport = FakeTransport()
+        # should not raise
+        bridge._check_disk()
+        # with nonexistent path, disk_stats should be empty (caught by OSError)
+        # or have emergency info if the path partially resolves
+        self.assertIsInstance(bridge._disk_stats, dict)
+
+
+class ProtocolScreenshotTests(unittest.TestCase):
+    def test_screenshot_result_is_checksummed(self):
+        from core.frame_bridge.protocol import (
+            make_screenshot_result,
+            make_screenshot_timeout,
+            verify_message,
+        )
+        result = make_screenshot_result("rid", 1, 2, True, "/tmp/x.jpg")
+        self.assertTrue(verify_message(result))
+        self.assertEqual(result["type"], "screenshot_result")
+        self.assertEqual(result["request_id"], "rid")
+
+        timeout_msg = make_screenshot_timeout("rid", 1, 2)
+        self.assertTrue(verify_message(timeout_msg))
+        self.assertEqual(timeout_msg["type"], "screenshot_timeout")
 
 
 if __name__ == "__main__":
