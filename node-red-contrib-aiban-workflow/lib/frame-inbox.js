@@ -3,6 +3,10 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const { DatabaseSync } = require("node:sqlite");
+const beijingNowISO = () => {
+    const now = new Date(Date.now() + 8 * 3600 * 1000);
+    return now.toISOString().replace("Z", "+08:00");
+};
 
 class FrameInbox {
     constructor(filename) {
@@ -40,7 +44,7 @@ class FrameInbox {
             frame.stream_id,
             Number(frame.frame_seq),
             JSON.stringify(frame),
-            new Date().toISOString()
+            beijingNowISO()
         );
         return Number(result.changes) === 1;
     }
@@ -57,7 +61,7 @@ class FrameInbox {
     }
 
     markEmitted(messageId) {
-        return Number(this.markStatement.run(new Date().toISOString(), messageId).changes) === 1;
+        return Number(this.markStatement.run(beijingNowISO(), messageId).changes) === 1;
     }
 
     counts() {

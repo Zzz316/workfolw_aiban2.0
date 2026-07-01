@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from .outbox import DurableOutbox
-from .protocol import canonical_json, make_envelope, verify_message
+from .protocol import BEIJING_TZ, canonical_json, make_envelope, verify_message
 
 
 class ZmqDealerTransport:
@@ -100,6 +101,8 @@ class ZmqDealerTransport:
                                 self._audit(
                                     "node_ack_received",
                                     **details,
+                                    stream_id=ack.get("stream_id"),
+                                    frame_seq=ack.get("frame_seq"),
                                     node_received_at=ack.get("node_received_at"),
                                     node_received_at_ms=ack.get("node_received_at_ms"),
                                     node_receive_diff_ms=ack.get("node_receive_diff_ms"),
@@ -108,22 +111,48 @@ class ZmqDealerTransport:
                                 )
                                 self._ack_count += 1
                                 if self.log_every and self._ack_count % self.log_every == 0:
+                                    # 管道式延迟: Python处理 → 网络往返 → Node落盘 → 端到端总计
+                                    delivery = details["delivery_ms"]
+                                    ack_rtt = details.get("ack_rtt_ms") or 0.0
+                                    node_persist = (
+                                        float(ack.get("node_inbox_persist_ms", 0) or 0)
+                                    )
+                                    py_side = max(0, delivery - ack_rtt - node_persist)
+                                    node_diff = ack.get("node_receive_diff_ms")
+                                    resend = max(0, details["send_count"] - 1)
+                                    seq = ack.get("frame_seq", "?")
+                                    stream = ack.get("stream_id", "?")
+                                    now_beijing = datetime.now(BEIJING_TZ).strftime(
+                                        "%H:%M:%S"
+                                    )
+
+                                    chain = (
+                                        "Py处理 {:>6.2f}ms → 网络往返 {:>6.2f}ms"
+                                        " → Node落盘 {:>6.2f}ms".format(
+                                            py_side, ack_rtt, node_persist
+                                        )
+                                    )
+                                    extra = ""
+                                    if node_diff is not None:
+                                        extra += " | SDK→Node {:.2f}ms".format(
+                                            float(node_diff)
+                                        )
+                                    if resend:
+                                        extra += " | 重发 {}".format(resend)
+
                                     text = (
-                                        "[FrameBridge延迟] message={} ACK往返={:.3f}ms "
-                                        "总投递={:.3f}ms 重发次数={}"
-                                    ).format(
-                                        details["message_id"],
-                                        details["ack_rtt_ms"] or 0.0,
-                                        details["delivery_ms"],
-                                        max(0, details["send_count"] - 1),
+                                        "[ACK] #{:<5} {} │ {} │ 端到端 {:>6.2f}ms{} │ {}".format(
+                                            seq,
+                                            stream,
+                                            chain,
+                                            delivery,
+                                            extra,
+                                            now_beijing,
+                                        )
                                     )
                                     if self.console_latency:
                                         print(text, flush=True)
-                                    self._log(
-                                        "info",
-                                        "%s",
-                                        text,
-                                    )
+                                    self._log("info", "%s", text)
                     except Exception as exc:
                         self._log("warning", "invalid frame ACK: %s", exc)
         finally:

@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.frame_bridge.outbox import DurableOutbox
-from core.frame_bridge.protocol import SCHEMA_VERSION, finalize_message, utc_now_iso
+from core.frame_bridge.protocol import SCHEMA_VERSION, finalize_message, beijing_now_iso
 from core.frame_bridge.transport import ZmqDealerTransport
 
 
@@ -26,7 +26,7 @@ def build_frame(session_id, sequence):
             "stream_id": stream_id,
             "frame_seq": sequence,
             "message_id": "{}:{}:{}".format(session_id, stream_id, sequence),
-            "captured_at": utc_now_iso(),
+            "captured_at": beijing_now_iso(),
             "captured_monotonic_ns": time.monotonic_ns(),
             "group_id": 1,
             "source_id": 1,

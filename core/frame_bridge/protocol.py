@@ -5,14 +5,22 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 SCHEMA_VERSION = 1
 
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def beijing_now_iso() -> str:
+    """Return current Beijing time (UTC+8) as ISO 8601 string with milliseconds."""
+    return datetime.now(BEIJING_TZ).isoformat(timespec="milliseconds")
+
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    """DEPRECATED alias retained for compatibility; output is Beijing time."""
+    return beijing_now_iso()
 
 
 def canonical_json(value: Any) -> str:
@@ -76,6 +84,6 @@ def make_ack(frame: Dict[str, Any]) -> Dict[str, Any]:
             "session_id": frame["session_id"],
             "stream_id": frame["stream_id"],
             "frame_seq": frame["frame_seq"],
-            "persisted_at": utc_now_iso(),
+            "persisted_at": beijing_now_iso(),
         }
     )

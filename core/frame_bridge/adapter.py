@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, Iterable, Optional
 
-from .protocol import SCHEMA_VERSION, finalize_message, utc_now_iso
+from .protocol import SCHEMA_VERSION, finalize_message, beijing_now_iso
 
 
 def _safe_call(obj: Any, method: str, default: Any = None) -> Any:
@@ -58,7 +58,7 @@ class FrameAdapter:
     def from_metadata(self, group_id: int, source_id: int, metadata: Any) -> Dict[str, Any]:
         convert_started_ns = time.perf_counter_ns()
         bridge_created_at_ms = int(time.time() * 1000)
-        sdk_received_at = utc_now_iso()
+        sdk_received_at = beijing_now_iso()
         stream_id = "group-{}/source-{}".format(int(group_id), int(source_id))
         frame_seq = self._next_sequence(stream_id)
         models: Dict[str, Any] = {}
@@ -79,7 +79,7 @@ class FrameAdapter:
             "stream_id": stream_id,
             "frame_seq": frame_seq,
             "message_id": "{}:{}:{}".format(self.session_id, stream_id, frame_seq),
-            "captured_at": str(sdk_time) if sdk_time else utc_now_iso(),
+            "captured_at": str(sdk_time) if sdk_time else beijing_now_iso(),
             "captured_monotonic_ns": time.monotonic_ns(),
             "bridge_created_at_ms": bridge_created_at_ms,
             "sdk_received_at": sdk_received_at,

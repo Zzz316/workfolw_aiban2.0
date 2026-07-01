@@ -91,11 +91,11 @@ python test_aiban_sdk_bridge.py --print-every 1
 每次运行自动生成：
 
 ```text
-logs/frame_bridge/transmission-YYYYMMDD-HHMMSS-PID.jsonl
 logs/frame_bridge/transmission-YYYYMMDD-HHMMSS-PID.log
+logs/frame_bridge/transmission-YYYYMMDD-HHMMSS-PID-summary.csv
 ```
 
-JSONL适合程序分析；文本日志适合人工查看。每个 `message_id` 通常依次出现：
+所有可读时间统一为北京时间（ISO 8601 `+08:00`）。文本日志适合逐阶段追踪；汇总CSV适合用Excel直接排序、筛选和比较。每个 `message_id` 通常依次出现：
 
 ```text
 sdk_received
@@ -105,6 +105,17 @@ node_ack_received
 ```
 
 若同一 `message_id` 出现多个 `transport_sent`，表示发生重传；最终出现 `node_ack_received` 表示Node-RED已经可靠落盘。通过相同 `message_id`、`frame_seq` 和标签，可对比Python终端、Node-RED Debug和本地传输日志。
+
+### 快速判断时间差
+
+直接打开 `*-summary.csv`，重点看四列：
+
+- `SDK到Node(ms)`：从Python收到SDK帧到Node-RED收到该帧。
+- `ACK往返(ms)`：Python发送到收到Node持久化确认。
+- `完整投递(ms)`：帧进入outbox到最终ACK的总耗时。
+- `评级`：`优秀 ≤20ms`、`正常 ≤100ms`、`警告 ≤300ms`、`滞后 >300ms`；没有ACK显示`未确认`。
+
+`重传次数 > 0` 表示发生过断线、ACK超时或Node-RED暂时不可用，但不等于丢帧。
 
 ## 6. 当前业务数据库
 

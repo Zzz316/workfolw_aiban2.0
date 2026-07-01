@@ -65,7 +65,9 @@ class FrameAdapterTests(unittest.TestCase):
         self.assertEqual(first["models"]["2"]["boxes"], [])
         self.assertIsInstance(first["bridge_created_at_ms"], int)
         self.assertIsInstance(first["sdk_received_at_ms"], int)
-        self.assertTrue(first["sdk_received_at"].endswith("+00:00"))
+        self.assertTrue(first["sdk_received_at"].endswith("+08:00"),
+                        msg="sdk_received_at should use Beijing time (+08:00), got: {}".format(
+                            first["sdk_received_at"]))
         self.assertGreaterEqual(first["sdk_convert_ms"], 0)
         self.assertTrue(verify_message(first))
 
@@ -169,20 +171,52 @@ class FrameBridgeBackpressureTests(unittest.TestCase):
 
 
 class TransmissionAuditTests(unittest.TestCase):
-    def test_audit_writes_jsonl_and_text(self):
+    def test_audit_writes_text_log(self):
         with tempfile.TemporaryDirectory() as directory:
             audit = TransmissionAuditLogger(directory, "test-run")
             audit.record(
                 "sdk_received",
                 message_id="m1",
+                stream_id="group-1/source-1",
                 frame_seq=1,
+                sdk_received_at="2026-07-01T10:00:00.000+08:00",
+                sdk_convert_ms=1.2,
                 labels=[{"label": "person", "confidence": 0.9}],
             )
+            audit.record(
+                "outbox_persisted",
+                message_id="m1",
+                stream_id="group-1/source-1",
+                frame_seq=1,
+                queue_wait_ms=2.3,
+                outbox_persist_ms=0.8,
+            )
+            audit.record(
+                "transport_sent",
+                message_id="m1",
+                stream_id="group-1/source-1",
+                frame_seq=1,
+                send_count=1,
+            )
+            audit.record(
+                "node_ack_received",
+                message_id="m1",
+                stream_id="group-1/source-1",
+                frame_seq=1,
+                node_received_at="2026-07-01T10:00:00.010+08:00",
+                node_receive_diff_ms=10,
+                node_inbox_persist_ms=0.7,
+                ack_rtt_ms=4,
+                delivery_ms=12,
+                send_count=1,
+            )
             audit.close()
-            json_data = json.loads(Path(audit.jsonl_path).read_text(encoding="utf-8"))
             text_data = Path(audit.text_path).read_text(encoding="utf-8")
-            self.assertEqual(json_data["event"], "sdk_received")
-            self.assertIn("message_id=m1", text_data)
+            summary_data = Path(audit.summary_path).read_text(encoding="utf-8-sig")
+            self.assertIn("[SDK]", text_data)
+            self.assertIn("person", text_data)
+            self.assertIn("完整投递(ms)", summary_data)
+            self.assertIn("优秀", summary_data)
 
 
 if __name__ == "__main__":

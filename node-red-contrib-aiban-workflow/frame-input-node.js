@@ -18,6 +18,21 @@ module.exports = function registerFrameInputNode(RED) {
         let receivedCount = 0;
         let latencyTotal = 0;
 
+        /** 返回当前北京时间的 ISO 8601 字符串 (UTC+8) */
+        function beijingNowISO(tsMs) {
+            const d = tsMs ? new Date(tsMs) : new Date();
+            // 转为北京时间 (UTC+8)
+            const beijing = new Date(d.getTime() + 8 * 3600 * 1000);
+            const Y = beijing.getUTCFullYear();
+            const M = String(beijing.getUTCMonth() + 1).padStart(2, "0");
+            const D = String(beijing.getUTCDate()).padStart(2, "0");
+            const h = String(beijing.getUTCHours()).padStart(2, "0");
+            const m = String(beijing.getUTCMinutes()).padStart(2, "0");
+            const s = String(beijing.getUTCSeconds()).padStart(2, "0");
+            const ms = String(beijing.getUTCMilliseconds()).padStart(3, "0");
+            return `${Y}-${M}-${D}T${h}:${m}:${s}.${ms}+08:00`;
+        }
+
         function collectLabels(frame) {
             const labels = [];
             for (const [modelId, result] of Object.entries(frame.models || {})) {
@@ -105,7 +120,7 @@ module.exports = function registerFrameInputNode(RED) {
                         };
                         frame.labels = collectLabels(frame);
                         frame.label_summary = formatLabels(frame.labels);
-                        frame.node_received_at = new Date(receivedAtMs).toISOString();
+                        frame.node_received_at = beijingNowISO(receivedAtMs);
                         frame.node_received_at_ms = receivedAtMs;
                         frame.receive_diff_ms = frame.sdk_received_at_ms
                             ? receivedAtMs - Number(frame.sdk_received_at_ms)
@@ -119,16 +134,24 @@ module.exports = function registerFrameInputNode(RED) {
                             if (receiveTotalMs !== null) latencyTotal += receiveTotalMs;
                             emitFrame(frame);
                             if (showLatency && receivedCount % logEvery === 0) {
+                                // 管道式延迟: SDK转换 → Python→Node(含网络) → Node落盘 = 总计
+                                const sdkConvert = frame._timing.sdk_convert_ms.toFixed(2);
+                                const pyToNode = receiveTotalMs?.toFixed(2) ?? "-";
+                                const wire = (wireMs !== null && wireMs !== undefined)
+                                    ? wireMs.toFixed(2) : "-";
+                                const nodePersist = frame._timing.node_inbox_persist_ms.toFixed(2);
+                                const totalDiff = frame.receive_diff_ms?.toFixed(2) ?? "-";
+                                const time = frame.node_received_at.slice(11, 19); // 只取 HH:MM:SS
                                 node.warn(
-                                    `[Node-RED接收] 时间=${frame.node_received_at}`
-                                    + ` group=${frame.group_id} source=${frame.source_id}`
-                                    + ` frame=${frame.frame_seq}`
-                                    + ` 标签=[${frame.label_summary}]`
-                                    + ` 与SDK接收时间差=${frame.receive_diff_ms}ms`
-                                    + ` SDK转换=${frame._timing.sdk_convert_ms}ms`
-                                    + ` Python→Node=${receiveTotalMs}ms`
-                                    + ` 线上=${wireMs}ms`
-                                    + ` Inbox落盘=${frame._timing.node_inbox_persist_ms}ms`
+                                    `[Node] #${String(frame.frame_seq).padEnd(5)}`
+                                    + ` g${frame.group_id}/s${frame.source_id} │`
+                                    + ` SDK ${sdkConvert.padStart(6)}ms →`
+                                    + ` Py→Node ${pyToNode.padStart(6)}ms`
+                                    + ` (网络 ${wire.padStart(5)}ms) →`
+                                    + ` 落盘 ${nodePersist.padStart(6)}ms │`
+                                    + ` ∑ ${totalDiff.padStart(6)}ms │`
+                                    + ` ${frame.label_summary || "-"} │`
+                                    + ` ${time}`
                                 );
                             }
                         }

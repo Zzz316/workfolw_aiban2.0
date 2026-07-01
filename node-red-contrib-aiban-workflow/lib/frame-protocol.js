@@ -3,6 +3,20 @@
 const crypto = require("node:crypto");
 const SCHEMA_VERSION = 1;
 
+/** 返回当前北京时间的 ISO 8601 字符串 (UTC+8) */
+function beijingNowISO(tsMs) {
+    const d = tsMs ? new Date(tsMs) : new Date();
+    const beijing = new Date(d.getTime() + 8 * 3600 * 1000);
+    const Y = beijing.getUTCFullYear();
+    const M = String(beijing.getUTCMonth() + 1).padStart(2, "0");
+    const D = String(beijing.getUTCDate()).padStart(2, "0");
+    const h = String(beijing.getUTCHours()).padStart(2, "0");
+    const m = String(beijing.getUTCMinutes()).padStart(2, "0");
+    const s = String(beijing.getUTCSeconds()).padStart(2, "0");
+    const ms = String(beijing.getUTCMilliseconds()).padStart(3, "0");
+    return `${Y}-${M}-${D}T${h}:${m}:${s}.${ms}+08:00`;
+}
+
 function canonicalize(value) {
     if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
     if (value && typeof value === "object") {
@@ -46,7 +60,7 @@ function makeAck(frame) {
         node_inbox_persist_ms: frame._timing
             ? frame._timing.node_inbox_persist_ms
             : null,
-        persisted_at: new Date().toISOString(),
+        persisted_at: beijingNowISO(),
     });
 }
 

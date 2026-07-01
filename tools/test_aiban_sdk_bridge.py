@@ -166,8 +166,8 @@ def main():
     bridge.start()
     print("Node-RED endpoint：{}".format(args.endpoint), flush=True)
     print("本次测试outbox：{}".format(outbox_path), flush=True)
-    print("详细JSONL日志：{}".format(audit.jsonl_path), flush=True)
     print("详细文本日志：{}".format(audit.text_path), flush=True)
+    print("逐帧耗时汇总：{}".format(audit.summary_path), flush=True)
     print("SDK pipeline：{}".format(args.pipeline_config), flush=True)
     print("按 Ctrl+C 停止。", flush=True)
 

@@ -51,11 +51,13 @@ frame=1 标签=[m1:person(0.950)] 转换并入队=1.234ms
 It also prints two local audit paths:
 
 ```text
-logs/frame_bridge/transmission-<run-id>.jsonl
 logs/frame_bridge/transmission-<run-id>.log
+logs/frame_bridge/transmission-<run-id>-summary.csv
 ```
 
-See `docs/AIBAN_TO_NODE_RED_DATA_PATH.md` for event definitions and the
+All readable timestamps use Beijing time (`+08:00`). Open the summary CSV in
+Excel and sort by `完整投递(ms)` or `评级` to locate slow frames quickly. See
+`docs/AIBAN_TO_NODE_RED_DATA_PATH.md` for event definitions and the
 reliability/latency design.
 
 ## Node-RED timing output
