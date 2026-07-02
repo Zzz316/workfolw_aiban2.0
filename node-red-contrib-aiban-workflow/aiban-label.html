@@ -1,0 +1,92 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-label", {
+        category: "艾班工作流",
+        color: "#87CEEB",
+        defaults: {
+            name: { value: "" },
+            label_id: { value: "" },
+            model_id: { value: "1" },
+            label: { value: "" },
+            confidence: { value: 0.5 },
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-tag",
+        paletteLabel: "aiban label",
+        label: function () {
+            const lid = this.label_id || "";
+            const lbl = this.label || "";
+            if (lid && lbl) return "标签 " + lid + ": " + lbl;
+            if (lid) return "标签 " + lid;
+            return this.name || "aiban label";
+        },
+        oneditprepare: function () {
+            // Initialize label_id from name if empty
+            if (!this.label_id && this.name) {
+                $("#node-input-label_id").val(this.name);
+            }
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-label">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
+        <input type="text" id="node-input-name" placeholder="标签 A">
+    </div>
+    <div class="form-row">
+        <label for="node-input-label_id"><i class="fa fa-key"></i> Label ID</label>
+        <input type="text" id="node-input-label_id" placeholder="A">
+        <span class="form-tip">唯一标识此标签步骤 (如 A, B, C)。用于拓扑排序和审计日志。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-model_id"><i class="fa fa-cube"></i> Model ID</label>
+        <input type="text" id="node-input-model_id" placeholder="1">
+    </div>
+    <div class="form-row">
+        <label for="node-input-label"><i class="fa fa-font"></i> Label</label>
+        <input type="text" id="node-input-label" placeholder="A">
+        <span class="form-tip">与 SDK 检测框的 label 字段精确匹配。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-confidence"><i class="fa fa-percent"></i> Confidence</label>
+        <input type="text" id="node-input-confidence" placeholder="0.5">
+        <span class="form-tip">最低置信度 (0 到 1)。标签 confidence >= 此值时判定为命中。</span>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="aiban-label">
+    <h3>aiban-label — 独立标签组件</h3>
+    <p>每个 aiban-label 实例只配置<strong>一个</strong>标签的识别条件
+    (model_id + label + confidence)。多个实例通过画布连线串联表达识别顺序。</p>
+
+    <h4>配置</h4>
+    <ul>
+        <li><b>Label ID</b>: 此标签步骤的唯一标识符 (如 A, B, C)。用于拓扑排序。</li>
+        <li><b>Model ID</b>: 要匹配的 SDK 模型 ID。</li>
+        <li><b>Label</b>: 要匹配的标签名称，与 SDK 检测框的 label 字段精确匹配。</li>
+        <li><b>Confidence</b>: 最低置信度阈值 (0-1)。</li>
+    </ul>
+
+    <h4>行为</h4>
+    <p>此节点为<strong>透传节点</strong>——所有帧都会传递到下游，无论是否匹配。
+    匹配结果追加到 <code>msg.aiban.label_matches[]</code> 数组中。</p>
+
+    <h4>拓扑规则</h4>
+    <p>在画布上按顺序连线即可定义识别顺序：</p>
+    <pre>[frame-input] → [标签 A] → [标签 B] → [标签 C] → [result]</pre>
+    <p>改变连线顺序 (如 A→C→B) 即可改变期望的识别顺序，无需修改任何节点配置。</p>
+
+    <h4>消息契约</h4>
+    <p>每个 aiban-label 在 <code>msg.aiban.label_matches</code> 中追加：</p>
+    <pre>{
+  "node_id": "&lt;Node-RED node id&gt;",
+  "label_id": "A",
+  "model_id": "1",
+  "label": "A",
+  "confidence_min": 0.5,
+  "matched": true,
+  "confidence": 0.94,
+  "match_duration_ms": 0.03
+}</pre>
+</script>

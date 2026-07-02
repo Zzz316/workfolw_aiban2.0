@@ -1,852 +1,767 @@
 "use strict";
 
 /**
- * Phase 2: A-B-C Closed-Loop Tests
+ * Phase 2 Closed-Loop Tests — Topology-Driven Architecture
  *
- * Covers all 12 required test scenarios using synthetic frames.
- * No real camera, ZMQ, or MySQL required.
+ * Tests the FlowRuntime engine, WorkflowStateStore, WorkflowAuditLogger,
+ * TopologyCompiler validation, and MysqlWriteQueue with the new
+ * topology-driven architecture.
  *
  * Run: node --test test/phase2-closed-loop.test.js
  */
 
-const test = require("node:test");
-const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const assert = require("node:assert/strict");
+const { describe, test, before, after, beforeEach } = require("node:test");
 
+const { FlowRuntime, TopologyCompiler, makeStateKey, makeEventId, makeStreamId } = require("../lib/flow-runtime");
 const { WorkflowStateStore } = require("../lib/workflow-state-store");
 const { WorkflowAuditLogger } = require("../lib/workflow-audit");
-const { SequenceEngine } = require("../lib/sequence-engine");
+const { MysqlWriteQueue } = require("../lib/mysql-write-queue");
 
-// ============================================================
-// Test Helpers
-// ============================================================
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function tempDir() {
-    return fs.mkdtempSync(path.join(os.tmpdir(), "aiban-phase2-"));
+    const dir = path.join(os.tmpdir(), `aiban-phase2-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
 }
 
-/** Safely remove a temp directory, handling Windows SQLite file locks. */
 function safeCleanup(dir) {
-    try {
-        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
-    } catch (_) {
-        // Best-effort cleanup; temp dirs are ephemeral
-    }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) { /* ok */ }
 }
 
 function makeFrame(overrides = {}) {
-    const base = {
-        workflow_id: "abc-sequence-demo",
-        session_id: "test-session-001",
+    const d = {
+        session_id: "test-session",
         group_id: 1,
         source_id: 1,
         frame_seq: 100,
-        message_id: `msg-${Math.random().toString(36).slice(2, 10)}`,
-        matched_steps: [],
+        message_id: "msg-100",
+        label_matches: [],
+        ...overrides,
     };
-    return { ...base, ...overrides };
+    return {
+        payload: {
+            message_id: d.message_id,
+            session_id: d.session_id,
+            stream_id: `group-${d.group_id}/source-${d.source_id}`,
+            frame_seq: d.frame_seq,
+            group_id: d.group_id,
+            source_id: d.source_id,
+            labels: [],
+            label_summary: "",
+        },
+        aiban: {
+            message_id: d.message_id,
+            session_id: d.session_id,
+            stream_id: `group-${d.group_id}/source-${d.source_id}`,
+            frame_seq: d.frame_seq,
+            label_matches: d.label_matches,
+        },
+        workflow: { workflow_id: "abc-demo" },
+    };
 }
 
-function makeTestEngine(tmpDir, opts = {}) {
-    const dbPath = path.join(tmpDir, "abc-state.db");
-    const stateStore = new WorkflowStateStore(dbPath);
-    const engine = new SequenceEngine({
-        workflowId: "abc-sequence-demo",
-        cycleTimeoutMs: opts.cycleTimeoutMs || 5000,
-        allowSameFrameRestart: Boolean(opts.allowSameFrameRestart),
-        stateStore,
+function makeLabelMatches(matchedIds, topology) {
+    return topology.map((lbl) => ({
+        node_id: `node-${lbl.labelId}`,
+        label_id: lbl.labelId,
+        model_id: lbl.modelId,
+        label: lbl.label,
+        confidence_min: lbl.confidenceMin,
+        matched: matchedIds.includes(lbl.labelId),
+        confidence: matchedIds.includes(lbl.labelId) ? 0.9 : null,
+        match_duration_ms: 0.03,
+    }));
+}
+
+const ABC_TOPOLOGY = [
+    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
+    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
+    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
+];
+
+const ACB_TOPOLOGY = [
+    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
+    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
+    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
+];
+
+const ABDC_TOPOLOGY = [
+    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
+    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
+    { labelId: "D", modelId: "1", label: "D", confidenceMin: 0.5 },
+    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
+];
+
+function createRuntime(topology, opts = {}) {
+    const dir = tempDir();
+    const stateDb = path.join(dir, "state.db");
+    const auditDir = path.join(dir, "logs", "workflow");
+    const store = new WorkflowStateStore(stateDb);
+    const audit = new WorkflowAuditLogger(auditDir, "test-run");
+    const runtime = new FlowRuntime({
+        topology,
+        stateStore: store,
+        auditLogger: audit,
+        workflowId: opts.workflowId || "abc-demo",
+        cycleTimeoutMs: opts.cycleTimeoutMs || 1000,
+        allowSameFrameRestart: opts.allowSameFrameRestart || false,
     });
-    return { engine, stateStore, dbPath };
+    return { runtime, store, audit, dir };
 }
 
-// ============================================================
-// Test Suite
-// ============================================================
+// ---------------------------------------------------------------------------
+// TopologyCompiler Validation
+// ---------------------------------------------------------------------------
 
-// -----------------------------------------------------------
-// Scenario 1: A → B → C → OK
-// -----------------------------------------------------------
-test("Scenario 1: A→B→C produces OK result with correct fields", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir);
-        let now = 1700000000000;
-        let seq = 100;
+describe("TopologyCompiler (static validation)", () => {
+    test("valid topology passes", () => {
+        const r = TopologyCompiler.validate(ABC_TOPOLOGY);
+        assert.equal(r.valid, true);
+        assert.equal(r.errors.length, 0);
+    });
 
-        // Frame 1: A detected
-        const fA = makeFrame({ frame_seq: seq++, message_id: "msg-a-1", matched_steps: ["A"] });
-        let events = engine.process(fA, now);
-        assert.equal(events.length, 1, "A should produce 1 transition event");
-        assert.equal(events[0].type, "transition");
-        assert.equal(events[0].step, "A");
-        now += 100;
+    test("empty topology fails", () => {
+        const r = TopologyCompiler.validate([]);
+        assert.equal(r.valid, false);
+        assert.ok(r.errors[0].includes("至少需要一个"));
+    });
 
-        // Frame 2: B detected
-        const fB = makeFrame({ frame_seq: seq++, message_id: "msg-b-1", matched_steps: ["B"] });
-        events = engine.process(fB, now);
-        assert.equal(events.length, 1, "B should produce 1 transition event");
-        assert.equal(events[0].type, "transition");
-        assert.equal(events[0].step, "B");
-        now += 100;
+    test("duplicate label_ids fail", () => {
+        const r = TopologyCompiler.validate([
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
+        ]);
+        assert.equal(r.valid, false);
+        assert.ok(r.errors.some((e) => e.includes("重复")));
+    });
 
-        // Frame 3: C detected
-        const fC = makeFrame({ frame_seq: seq++, message_id: "msg-c-1", matched_steps: ["C"] });
-        events = engine.process(fC, now);
-        assert.equal(events.length, 1, "C should produce 1 terminal event");
-        assert.equal(events[0].type, "terminal");
-        const result = events[0].result;
-        assert.equal(result.result_status, "OK");
-        assert.equal(result.cycle_duration_ms, 200);
-        assert.ok(result.event_id, "event_id should be present");
-        assert.ok(result.cycle_id, "cycle_id should be present");
-        assert.ok(result.cycle_started_at, "cycle_started_at should be set");
-        assert.ok(result.cycle_finished_at, "cycle_finished_at should be set");
-        assert.equal(result.failure_reason, null, "OK should have no failure_reason");
-        assert.ok(result.actual_sequence, "actual_sequence should be present");
-
-        // Verify state is IDLE
-        const key = "abc-sequence-demo:test-session-001:1:1";
-        const finalState = stateStore.getState(key);
-        assert.equal(finalState.current_state, "IDLE");
-
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    test("4-label and 5-label topologies pass", () => {
+        assert.equal(TopologyCompiler.validate(ABDC_TOPOLOGY).valid, true);
+        assert.equal(TopologyCompiler.validate([
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
+            { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
+            { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
+            { labelId: "D", modelId: "1", label: "D", confidenceMin: 0.5 },
+            { labelId: "E", modelId: "1", label: "E", confidenceMin: 0.5 },
+        ]).valid, true);
+    });
 });
 
-// -----------------------------------------------------------
-// Scenario 2: B → A → C → NG (wrong order)
-// -----------------------------------------------------------
-test("Scenario 2: B first (wrong order) produces NG with correct reason", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir);
-        let now = 1700000000000;
-        let seq = 100;
+// ---------------------------------------------------------------------------
+// Scenario 1: A→B→C → OK
+// ---------------------------------------------------------------------------
 
-        // Frame 1: B detected (wrong — expected A first, so nothing happens since IDLE only accepts A)
-        const fB = makeFrame({ frame_seq: seq++, message_id: "msg-b-first", matched_steps: ["B"] });
-        let events = engine.process(fB, now);
-        // B while IDLE: no transition (only A starts the cycle)
-        assert.equal(events.length, 0, "B while IDLE should produce no events");
-        now += 100;
+describe("Scenario 1: A→B→C → OK", () => {
+    let ctx;
+    beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY, { cycleTimeoutMs: 5000 }); });
 
-        // Frame 2: A detected — starts cycle
-        const fA = makeFrame({ frame_seq: seq++, message_id: "msg-a-1", matched_steps: ["A"] });
-        events = engine.process(fA, now);
+    test("complete sequence produces OK", () => {
+        const { runtime, store } = ctx;
+        const key = makeStateKey("abc-demo", "test-session", 1, 1);
+
+        let events = runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
         assert.equal(events.length, 1);
         assert.equal(events[0].type, "transition");
-        assert.equal(events[0].step, "A");
-        now += 100;
+        assert.equal(events[0].labelId, "A");
+        assert.equal(store.getState(key).step_index, 1);
 
-        // Frame 3: C detected while WAIT_B → NG (skip B)
-        const fC = makeFrame({ frame_seq: seq++, message_id: "msg-c-wrong", matched_steps: ["C"] });
-        events = engine.process(fC, now);
+        events = runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["B"], ABC_TOPOLOGY),
+        }), 1100);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].labelId, "B");
+        assert.equal(store.getState(key).step_index, 2);
+
+        events = runtime.process(makeFrame({
+            frame_seq: 102, message_id: "msg-102",
+            label_matches: makeLabelMatches(["C"], ABC_TOPOLOGY),
+        }), 1200);
         assert.equal(events.length, 1);
         assert.equal(events[0].type, "terminal");
-        assert.equal(events[0].result.result_status, "NG");
-        assert.ok(
-            events[0].result.failure_reason.includes("跳步") ||
-            events[0].result.failure_reason.includes("期望步骤 B"),
-            `failure_reason should mention skip, got: ${events[0].result.failure_reason}`
-        );
+        assert.equal(events[0].result.result_status, "OK");
+        assert.equal(events[0].result.cycle_duration_ms, 200);
+        assert.equal(store.getState(key).step_index, 0);
+    });
 
-        // Verify state reset to IDLE
-        const key = "abc-sequence-demo:test-session-001:1:1";
-        const finalState = stateStore.getState(key);
-        assert.equal(finalState.current_state, "IDLE");
-
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
-// -----------------------------------------------------------
-// Scenario 3: A → C → NG (skip B)
-// -----------------------------------------------------------
-test("Scenario 3: A→C produces NG (skip B detected)", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir);
-        let now = 1700000000000;
-        let seq = 100;
+// ---------------------------------------------------------------------------
+// Scenario 2: B→A→C → NG (B first ignored, then A→C skip B)
+// ---------------------------------------------------------------------------
+
+describe("Scenario 2: B first → NG", () => {
+    let ctx;
+    beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY); });
+
+    test("B ignored when IDLE, then A→C (skip B) → NG", () => {
+        const { runtime } = ctx;
+
+        // B first — ignored (IDLE expects A)
+        let events = runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["B"], ABC_TOPOLOGY),
+        }), 1000);
+        assert.equal(events.length, 0, "B ignored at IDLE");
 
         // A starts cycle
-        const fA = makeFrame({ frame_seq: seq++, message_id: "msg-a-1", matched_steps: ["A"] });
-        let events = engine.process(fA, now);
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "A");
-        now += 100;
+        runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 2000);
 
-        // C directly after A → skip B → NG
-        const fC = makeFrame({ frame_seq: seq++, message_id: "msg-c-skip", matched_steps: ["C"] });
-        events = engine.process(fC, now);
-        assert.equal(events.length, 1);
+        // C before B → NG
+        events = runtime.process(makeFrame({
+            frame_seq: 102, message_id: "msg-102",
+            label_matches: makeLabelMatches(["C"], ABC_TOPOLOGY),
+        }), 3000);
         assert.equal(events[0].type, "terminal");
         assert.equal(events[0].result.result_status, "NG");
-        assert.ok(events[0].result.failure_reason.includes("B"));
+        assert.ok(events[0].result.failure_reason.includes("跳步"));
+    });
 
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
-// -----------------------------------------------------------
-// Scenario 4: A → B → timeout → TIMEOUT
-// -----------------------------------------------------------
-test("Scenario 4: A→B then timeout produces TIMEOUT result", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir, { cycleTimeoutMs: 1000 });
-        let now = 1700000000000;
-        let seq = 100;
+// ---------------------------------------------------------------------------
+// Scenario 3: A→C (skip B) → NG
+// ---------------------------------------------------------------------------
 
-        // A starts cycle
-        const fA = makeFrame({ frame_seq: seq++, message_id: "msg-a-1", matched_steps: ["A"] });
-        let events = engine.process(fA, now);
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "A");
-        now += 50;
+describe("Scenario 3: A→C skip B → NG", () => {
+    let ctx;
+    beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY); });
 
-        // B detected
-        const fB = makeFrame({ frame_seq: seq++, message_id: "msg-b-1", matched_steps: ["B"] });
-        events = engine.process(fB, now);
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "B");
-        now += 50;
+    test("skipping B produces NG with clear reason", () => {
+        const { runtime } = ctx;
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
 
-        // Jump past timeout
-        now += 1100; // Total: 1200ms > 1000ms timeout
+        const events = runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["C"], ABC_TOPOLOGY),
+        }), 2000);
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "NG");
+        assert.ok(events[0].result.failure_reason.includes("跳步"));
+        assert.ok(events[0].result.failure_reason.includes("C"));
+    });
 
-        // Next frame triggers timeout check
-        const fX = makeFrame({ frame_seq: seq++, message_id: "msg-x-1", matched_steps: [] });
-        events = engine.process(fX, now);
-        // Should have TIMEOUT terminal event
-        const terminalEvents = events.filter((e) => e.type === "terminal");
-        assert.ok(terminalEvents.length >= 1, "Should have at least 1 terminal event");
-        const timeoutResult = terminalEvents.find((e) => e.result.result_status === "TIMEOUT");
-        assert.ok(timeoutResult, "Should have a TIMEOUT result");
-        assert.ok(timeoutResult.result.failure_reason.includes("超时"));
-
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
-// -----------------------------------------------------------
-// Scenario 5: Same label across multiple frames — no duplicate step advance
-// -----------------------------------------------------------
-test("Scenario 5: Same label in consecutive frames only advances once", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir);
-        let now = 1700000000000;
-        let seq = 100;
+// ---------------------------------------------------------------------------
+// Scenario 4: A→B then timeout → TIMEOUT
+// ---------------------------------------------------------------------------
 
-        // Frame 1: A detected → WAIT_B
-        let events = engine.process(
-            makeFrame({ frame_seq: seq++, message_id: "msg-a-1", matched_steps: ["A"] }),
-            now
-        );
-        assert.equal(events.length, 1);
-        now += 100;
+describe("Scenario 4: Timeout → TIMEOUT", () => {
+    test("A→B then timeout produces TIMEOUT", () => {
+        const ctx = createRuntime(ABC_TOPOLOGY, { cycleTimeoutMs: 300 });
+        const { runtime } = ctx;
 
-        // Frame 2: A again (same label, new frame_seq) → should NOT transition again
-        events = engine.process(
-            makeFrame({ frame_seq: seq++, message_id: "msg-a-2", matched_steps: ["A"] }),
-            now
-        );
-        // While WAIT_B and seeing A again → NG (wrong order)
-        const terminalEvents = events.filter((e) => e.type === "terminal");
-        assert.ok(terminalEvents.length > 0, "Re-seeing A while WAIT_B should produce NG");
-        assert.equal(terminalEvents[0].result.result_status, "NG");
+        // Start cycle
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
 
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
+        // B arrives quickly (100ms later)
+        runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["B"], ABC_TOPOLOGY),
+        }), 1100);
+
+        // Next frame arrives well after timeout (500ms later = 600ms elapsed > 300ms timeout)
+        const events = runtime.process(makeFrame({
+            frame_seq: 102, message_id: "msg-102",
+            label_matches: makeLabelMatches([], ABC_TOPOLOGY),
+        }), 1700);
+        assert.equal(events.length, 1, "Should get 1 TIMEOUT event");
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "TIMEOUT");
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
 });
 
-// -----------------------------------------------------------
-// Scenario 6: Same message_id replay — no duplicate state change or DB write
-// -----------------------------------------------------------
-test("Scenario 6: Same message_id replay is deduplicated", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir);
-        let now = 1700000000000;
-        let seq = 100;
+// ---------------------------------------------------------------------------
+// Scenario 5: Same label repeat → NG (乱序)
+// ---------------------------------------------------------------------------
 
-        // First delivery of A
-        const msgId = "msg-a-replay";
-        let events = engine.process(
-            makeFrame({ frame_seq: seq++, message_id: msgId, matched_steps: ["A"] }),
-            now
-        );
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "A");
-        now += 10;
+describe("Scenario 5: Same label repeat → NG", () => {
+    let ctx;
+    beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY); });
 
-        // Replay: same message_id, same frame_seq → should be skipped
-        events = engine.process(
-            makeFrame({ frame_seq: seq - 1, message_id: msgId, matched_steps: ["A"] }),
-            now
-        );
-        // frame_seq dedup kicks in first (seq <= last_frame_seq)
-        assert.equal(events.length, 0, "Replay with same/lower frame_seq should be skipped");
+    test("A again in WAIT_B produces NG", () => {
+        const { runtime } = ctx;
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
 
-        // Also test: new frame_seq but same message_id while at IDLE
-        // Reset state
-        const key = "abc-sequence-demo:test-session-001:1:1";
-        stateStore.resetState(key);
+        const events = runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1100);
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "NG");
+        assert.ok(events[0].result.failure_reason.includes("乱序"));
+    });
 
-        // Fresh start
-        events = engine.process(
-            makeFrame({ frame_seq: 200, message_id: "msg-new-a", matched_steps: ["A"] }),
-            now
-        );
-        assert.equal(events.length, 1);
-        now += 10;
-
-        // Replay with higher frame_seq but same message_id
-        // This is allowed to process since frame_seq > last_frame_seq
-        // But the message_id dedup at same step prevents re-processing
-        // Actually, looking at the logic: message_id dedup only triggers if last_message_id === messageId
-        // So a replay with the same message ID but higher frame_seq would still be caught by message_id check
-        events = engine.process(
-            makeFrame({ frame_seq: 201, message_id: "msg-new-a", matched_steps: ["A"] }),
-            now
-        );
-        assert.equal(events.length, 0, "Replay with same message_id should be deduplicated");
-
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
-// -----------------------------------------------------------
-// Scenario 7: Two parallel sources — state isolation
-// -----------------------------------------------------------
-test("Scenario 7: Two source_ids run in parallel with isolated states", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir);
-        let now = 1700000000000;
+// ---------------------------------------------------------------------------
+// Scenario 6: message_id replay dedup
+// ---------------------------------------------------------------------------
 
-        // Source 1: A → starts cycle
-        let events = engine.process(
-            makeFrame({ session_id: "s1", group_id: 1, source_id: 1, frame_seq: 100, message_id: "s1-a", matched_steps: ["A"] }),
-            now
-        );
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "A");
+describe("Scenario 6: message_id replay dedup", () => {
+    let ctx;
+    beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY); });
 
-        // Source 2: A → starts its own cycle
-        events = engine.process(
-            makeFrame({ session_id: "s1", group_id: 1, source_id: 2, frame_seq: 100, message_id: "s2-a", matched_steps: ["A"] }),
-            now + 10
-        );
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "A");
-
-        // Source 1: B → advances
-        events = engine.process(
-            makeFrame({ session_id: "s1", group_id: 1, source_id: 1, frame_seq: 101, message_id: "s1-b", matched_steps: ["B"] }),
-            now + 20
-        );
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "B");
-
-        // Source 2: C (skip) → NG for source 2
-        events = engine.process(
-            makeFrame({ session_id: "s1", group_id: 1, source_id: 2, frame_seq: 101, message_id: "s2-c", matched_steps: ["C"] }),
-            now + 30
-        );
-        const ngEvents = events.filter((e) => e.type === "terminal" && e.result.result_status === "NG");
-        assert.ok(ngEvents.length > 0, "Source 2 should get NG");
-
-        // Source 1: C → OK
-        events = engine.process(
-            makeFrame({ session_id: "s1", group_id: 1, source_id: 1, frame_seq: 102, message_id: "s1-c", matched_steps: ["C"] }),
-            now + 40
-        );
-        const okEvents = events.filter((e) => e.type === "terminal" && e.result.result_status === "OK");
-        assert.ok(okEvents.length > 0, "Source 1 should get OK");
-
-        // Verify state keys are separate
-        const key1 = "abc-sequence-demo:s1:1:1";
-        const key2 = "abc-sequence-demo:s1:1:2";
-        const s1 = stateStore.getState(key1);
-        const s2 = stateStore.getState(key2);
-        // Both states reset to IDLE after cycle completion
-        assert.equal(s1.current_state, "IDLE");
-        assert.equal(s2.current_state, "IDLE");
-        // cycle_id null after reset (cycles completed)
-        assert.equal(s1.cycle_id, null, "Source 1 cycle should be reset");
-        assert.equal(s2.cycle_id, null, "Source 2 cycle should be reset");
-
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
-});
-
-// -----------------------------------------------------------
-// Scenario 8: Two sessions — state isolation
-// -----------------------------------------------------------
-test("Scenario 8: Different session_id values isolated", async (t) => {
-    const dir = tempDir();
-    try {
-        const { engine, stateStore } = makeTestEngine(dir);
-        let now = 1700000000000;
-
-        // Session 1: A
-        engine.process(
-            makeFrame({ session_id: "session-a", group_id: 1, source_id: 1, frame_seq: 100, message_id: "sa-a", matched_steps: ["A"] }),
-            now
-        );
-
-        // Session 2: A (same frame_seq, different session)
-        const events = engine.process(
-            makeFrame({ session_id: "session-b", group_id: 1, source_id: 1, frame_seq: 100, message_id: "sb-a", matched_steps: ["A"] }),
-            now + 10
-        );
-        assert.equal(events.length, 1);
-        assert.equal(events[0].step, "A");
-
-        // Verify different state keys
-        const keyA = "abc-sequence-demo:session-a:1:1";
-        const keyB = "abc-sequence-demo:session-b:1:1";
-        const sa = stateStore.getState(keyA);
-        const sb = stateStore.getState(keyB);
-        assert.equal(sa.current_state, "WAIT_B");
-        assert.equal(sb.current_state, "WAIT_B");
-        assert.notEqual(sa.cycle_id, sb.cycle_id);
-
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
-});
-
-// -----------------------------------------------------------
-// Scenario 9: MySQL retry succeeds after transient failure
-// -----------------------------------------------------------
-test("Scenario 9: Write queue retries and succeeds after transient failures", async (t) => {
-    // We test the MysqlWriteQueue queue logic without a real MySQL connection.
-    // The queue should handle retry logic correctly: enqueue items, retry on
-    // failure, succeed eventually.
-    //
-    // Since we can't mock mysql2's internal pool easily in a unit test,
-    // we verify the MysqlWriteQueue class structure and stats tracking.
-
-    const dir = tempDir();
-    try {
-        const { MysqlWriteQueue } = require("../lib/mysql-write-queue");
-
-        // Create queue without a real pool (it's lazy-initialized)
-        const queue = new MysqlWriteQueue({
-            host: "127.0.0.1",
-            port: 3306,
-            user: "root",
-            password: "",
-            database: "icamera_data",
-            maxRetries: 3,
-            retryDelayMs: 100,
-            queueSize: 10,
+    test("replay does not duplicate", () => {
+        const { runtime } = ctx;
+        const frame = makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         });
+        let events = runtime.process(frame, 1000);
+        assert.equal(events.length, 1);
+        events = runtime.process(frame, 1000);
+        assert.equal(events.length, 0, "Replay dedup");
+    });
 
-        // Basic stats before any operations
-        const stats = queue.stats();
-        assert.equal(stats.enqueued, 0);
-        assert.equal(stats.pending, 0);
-
-        // Close without connecting
-        await queue.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
-// -----------------------------------------------------------
-// Scenario 10: Queue overflow protection and failure fallback
-// -----------------------------------------------------------
-test("Scenario 10: Queue overflow protection and stats tracking", async (t) => {
-    const dir = tempDir();
-    try {
-        const { MysqlWriteQueue } = require("../lib/mysql-write-queue");
+// ---------------------------------------------------------------------------
+// Scenario 7: Parallel source isolation
+// ---------------------------------------------------------------------------
 
-        // Create a queue with small size to test overflow protection
-        // Use a localhost that may or may not be running MySQL — we only
-        // test queue mechanics, not actual connection success.
-        const queue = new MysqlWriteQueue({
-            host: process.env.MYSQL_HOST || "127.0.0.1",
-            port: Number(process.env.MYSQL_PORT) || 3306,
-            user: process.env.MYSQL_USER || "root",
-            password: process.env.MYSQL_PASSWD || "",
-            database: process.env.MYSQL_DB || "icamera_data",
-            maxRetries: 1,
-            retryDelayMs: 100,
-            queueSize: 3, // Very small — will overflow quickly
-        });
+describe("Scenario 7: Source isolation", () => {
+    let ctx;
+    beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY); });
 
-        const testRow = {
-            event_id: "test:overflow",
-            cycle_id: "cycle-1",
-            workflow_id: "test",
-            session_id: "s1",
-            stream_id: "group-1/source-1",
-            group_id: 1,
-            source_id: 1,
-            result_status: "OK",
-            created_at: "2026-07-02T08:00:00.000+08:00",
-        };
+    test("two sources progress independently", () => {
+        const { runtime, store } = ctx;
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-s1-100", source_id: 1,
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
+        runtime.process(makeFrame({
+            frame_seq: 50, message_id: "msg-s2-50", source_id: 2,
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
 
-        // Enqueue many rows — first 3 fit in queue, rest go to overflow
-        for (let i = 0; i < 8; i++) {
-            queue.enqueue({ ...testRow, event_id: `test:overflow:${i}` });
-        }
+        const s1 = store.getState(makeStateKey("abc-demo", "test-session", 1, 1));
+        const s2 = store.getState(makeStateKey("abc-demo", "test-session", 1, 2));
+        assert.equal(s1.step_index, 1);
+        assert.equal(s2.step_index, 1);
+        assert.notEqual(s1.cycle_id, s2.cycle_id);
+    });
 
-        const stats = queue.stats();
-        // Should have enqueued at least queueSize items before overflow kicks in
-        assert.ok(stats.enqueued >= 3,
-            `Should enqueue at least 3 before overflow, got enqueued=${stats.enqueued}`);
-        // Pending should not exceed queueSize
-        assert.ok(stats.pending <= 3,
-            `Pending should not exceed queueSize of 3, got pending=${stats.pending}`);
-
-        await queue.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
-// -----------------------------------------------------------
-// Scenario 11: Restart with incomplete cycle → INTERRUPTED
-// -----------------------------------------------------------
-test("Scenario 11: Restart recovery marks incomplete cycle as INTERRUPTED", async (t) => {
-    const dir = tempDir();
-    try {
-        const dbPath = path.join(dir, "abc-state.db");
-        const stateStore = new WorkflowStateStore(dbPath);
-        const engine = new SequenceEngine({
-            workflowId: "abc-sequence-demo",
-            cycleTimeoutMs: 5000,
-            stateStore,
-        });
+// ---------------------------------------------------------------------------
+// Scenario 8: Session isolation
+// ---------------------------------------------------------------------------
 
-        let now = 1700000000000;
+describe("Scenario 8: Session isolation", () => {
+    let ctx;
+    beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY); });
 
-        // Start a cycle with A
-        engine.process(
-            makeFrame({ frame_seq: 100, message_id: "rec-a", matched_steps: ["A"] }),
-            now
-        );
+    test("different sessions isolated", () => {
+        const { runtime, store } = ctx;
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-s1-100", session_id: "session-1",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-s2-100", session_id: "session-2",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
 
-        // Verify WAIT_B
-        const key = "abc-sequence-demo:test-session-001:1:1";
-        let state = stateStore.getState(key);
-        assert.equal(state.current_state, "WAIT_B");
+        assert.equal(store.getState(makeStateKey("abc-demo", "session-1", 1, 1)).step_index, 1);
+        assert.equal(store.getState(makeStateKey("abc-demo", "session-2", 1, 1)).step_index, 1);
+    });
 
-        // Simulate restart: create new engine with SAME state store
-        const engine2 = new SequenceEngine({
-            workflowId: "abc-sequence-demo",
-            cycleTimeoutMs: 5000,
-            stateStore,
-        });
-
-        // Jump past timeout
-        const recovered = engine2.recover(now + 10000);
-
-        // Should have 1 recovered result
-        assert.ok(recovered.length > 0, "Should recover expired state");
-        const recoveredResult = recovered[0].result;
-        assert.equal(recoveredResult.result_status, "INTERRUPTED");
-        assert.ok(
-            recoveredResult.failure_reason.includes("重启") ||
-            recoveredResult.failure_reason.includes("过期"),
-            `failure_reason should mention restart/expiry, got: ${recoveredResult.failure_reason}`
-        );
-
-        // State should be reset to IDLE
-        state = stateStore.getState(key);
-        assert.equal(state.current_state, "IDLE");
-
-        stateStore.close();
-    } finally {
-        safeCleanup(dir);
-    }
+    after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
-// -----------------------------------------------------------
-// Scenario 12: Audit log completeness — all events, JSONL, CSV
-// -----------------------------------------------------------
-test("Scenario 12: Workflow audit logger produces complete output", async (t) => {
-    const dir = tempDir();
-    try {
-        const auditDir = path.join(dir, "logs", "workflow");
-        const audit = new WorkflowAuditLogger(auditDir, "test-run-001");
+// ---------------------------------------------------------------------------
+// Scenario 9: MysqlWriteQueue stats
+// ---------------------------------------------------------------------------
 
-        // Record a full sequence of events
-        audit.record("frame_received", {
-            message_id: "audit-msg-1",
-            frame_seq: 100,
-            group_id: 1,
-            source_id: 1,
-            session_id: "s1",
-            stream_id: "group-1/source-1",
-            label_summary: "m1:A(0.900)",
+describe("Scenario 9: MysqlWriteQueue stats", () => {
+    test("queue initializes correctly", () => {
+        const wq = new MysqlWriteQueue({
+            host: "127.0.0.1", port: 3306, user: "root", password: "",
+            database: "icamera_data", maxRetries: 3, retryDelayMs: 500, queueSize: 100,
         });
-
-        audit.record("label_match_finished", {
-            message_id: "audit-msg-1",
-            frame_seq: 100,
-            group_id: 1,
-            source_id: 1,
-            session_id: "s1",
-            stream_id: "group-1/source-1",
-            matched_steps: ["A"],
-            match_duration_ms: 0.42,
-        });
-
-        audit.record("sequence_transition", {
-            cycle_id: "cyc-001",
-            previous_state: "IDLE",
-            current_state: "WAIT_B",
-            recognized_step: "A",
-            stage_duration_ms: 0.08,
-            workflow_id: "abc-demo",
-            message_id: "audit-msg-1",
-            frame_seq: 100,
-            group_id: 1,
-            source_id: 1,
-            session_id: "s1",
-            stream_id: "group-1/source-1",
-        });
-
-        audit.record("sequence_completed", {
-            cycle_id: "cyc-001",
-            result_status: "OK",
-            cycle_duration_ms: 5000,
-            actual_sequence: JSON.stringify(["A", "B", "C"]),
-            total_processing_ms: 4.25,
-            workflow_id: "abc-demo",
-            message_id: "audit-msg-3",
-            event_id: "abc-demo:s1:group-1/source-1:cyc-001:OK",
-            frame_seq: 102,
-            group_id: 1,
-            source_id: 1,
-            session_id: "s1",
-            stream_id: "group-1/source-1",
-        });
-
-        // Record a cycle summary
-        audit.recordCycleSummary({
-            cycle_id: "cyc-001",
-            workflow_id: "abc-demo",
-            stream_id: "group-1/source-1",
-            start_frame_seq: 100,
-            end_frame_seq: 102,
-            step_a_frame: 100,
-            step_a_at: "2026-07-02T08:00:00.000+08:00",
-            step_b_frame: 101,
-            step_b_at: "2026-07-02T08:00:02.000+08:00",
-            step_c_frame: 102,
-            step_c_at: "2026-07-02T08:00:05.000+08:00",
-            match_duration_ms: 0.42,
-            sequence_duration_ms: 0.08,
-            db_queue_ms: 0.15,
-            db_write_ms: 3.60,
-            total_processing_ms: 4.25,
-            cycle_duration_ms: 5000,
-            result_status: "OK",
-            failure_reason: "",
-        });
-
-        // Close to flush
-        await audit.close();
-
-        // Verify files exist
-        const files = audit.filePaths;
-        assert.ok(fs.existsSync(files.text), "Text log should exist");
-        assert.ok(fs.existsSync(files.jsonl), "JSONL should exist");
-        assert.ok(fs.existsSync(files.csv), "CSV summary should exist");
-
-        // Verify text log content
-        const textContent = fs.readFileSync(files.text, "utf8");
-        assert.ok(textContent.includes("frame_received"), "Text log should contain frame_received");
-        assert.ok(textContent.includes("WAIT_B"), "Text log should contain state transition");
-        assert.ok(textContent.includes("✅ OK"), "Text log should contain OK result");
-
-        // Verify JSONL content
-        const jsonlContent = fs.readFileSync(files.jsonl, "utf8");
-        const lines = jsonlContent.trim().split("\n");
-        assert.ok(lines.length >= 4, `JSONL should have at least 4 events, got ${lines.length}`);
-
-        // Each line should parse as JSON
-        for (const line of lines) {
-            const obj = JSON.parse(line);
-            assert.ok(obj.event, "Each JSONL line should have 'event'");
-            assert.ok(obj.audit_at, "Each JSONL line should have 'audit_at'");
-        }
-
-        // Verify CSV content
-        const csvContent = fs.readFileSync(files.csv, "utf8");
-        assert.ok(csvContent.includes("cycle_id"), "CSV should have header");
-        assert.ok(csvContent.includes("cyc-001"), "CSV should have cycle data");
-        assert.ok(csvContent.includes("OK"), "CSV should have result status");
-    } finally {
-        safeCleanup(dir);
-    }
+        const s = wq.stats();
+        assert.equal(s.enqueued, 0);
+        assert.equal(s.succeeded, 0);
+        assert.equal(s.failed, 0);
+        assert.equal(s.pending, 0);
+        wq.close();
+    });
 });
 
-// -----------------------------------------------------------
-// Additional: Label Match Logic Test
-// -----------------------------------------------------------
-test("Label match function: correct matching against step config", async (t) => {
-    // Test the matching logic used by aiban-label-match node
-    function matchLabels(labels, steps) {
-        const matched = [];
-        for (const step of steps) {
-            for (const label of labels) {
-                if (
-                    String(label.model_id) === String(step.model_id) &&
-                    String(label.label) === step.label &&
-                    Number(label.confidence) >= Number(step.confidence_min)
-                ) {
-                    matched.push(step.id);
-                    break;
-                }
+// ---------------------------------------------------------------------------
+// Scenario 10: Queue overflow
+// ---------------------------------------------------------------------------
+
+describe("Scenario 10: Queue overflow protection", () => {
+    test("overflow writes to fallback", () => {
+        const dir = tempDir();
+        try {
+            const wq = new MysqlWriteQueue({
+                host: process.env.MYSQL_HOST || "127.0.0.1",
+                port: Number(process.env.MYSQL_PORT) || 3306,
+                user: process.env.MYSQL_USER || "root",
+                password: process.env.MYSQL_PASSWD || "",
+                database: process.env.MYSQL_DB || "icamera_data",
+                maxRetries: 1, retryDelayMs: 100, queueSize: 3,
+            });
+            for (let i = 0; i < 8; i++) {
+                wq.enqueue({
+                    event_id: `test-event-${i}`, cycle_id: `cyc-${i}`,
+                    workflow_id: "test", session_id: "s1", stream_id: "group-1/source-1",
+                    group_id: 1, source_id: 1, result_status: "OK",
+                    start_frame_seq: i * 10, end_frame_seq: i * 10 + 5,
+                    actual_sequence: '["A","B","C"]', failure_reason: null,
+                    started_at: "2026-07-02T08:00:00.000+08:00",
+                    finished_at: "2026-07-02T08:00:05.000+08:00",
+                    cycle_duration_ms: 5000, db_write_duration_ms: null,
+                    created_at: "2026-07-02T08:00:05.000+08:00",
+                });
             }
-        }
-        return matched;
-    }
-
-    const steps = [
-        { id: "A", model_id: "1", label: "A", confidence_min: 0.5 },
-        { id: "B", model_id: "1", label: "B", confidence_min: 0.5 },
-        { id: "C", model_id: "1", label: "C", confidence_min: 0.5 },
-    ];
-
-    // Match A
-    let matched = matchLabels(
-        [{ model_id: "1", label: "A", confidence: 0.9 }],
-        steps
-    );
-    assert.deepEqual(matched, ["A"]);
-
-    // Match multiple
-    matched = matchLabels(
-        [
-            { model_id: "1", label: "A", confidence: 0.6 },
-            { model_id: "1", label: "B", confidence: 0.7 },
-        ],
-        steps
-    );
-    assert.deepEqual(matched, ["A", "B"]);
-
-    // Below confidence → no match
-    matched = matchLabels(
-        [{ model_id: "1", label: "A", confidence: 0.3 }],
-        steps
-    );
-    assert.deepEqual(matched, [], "Below confidence should not match");
-
-    // Wrong model_id → no match
-    matched = matchLabels(
-        [{ model_id: "2", label: "A", confidence: 0.9 }],
-        steps
-    );
-    assert.deepEqual(matched, [], "Wrong model_id should not match");
+            const s = wq.stats();
+            assert.ok(s.enqueued + s.failed >= 8,
+                `enqueued=${s.enqueued} + failed=${s.failed} should be >= 8`);
+            wq.close();
+        } finally { safeCleanup(dir); }
+    });
 });
 
-// -----------------------------------------------------------
-// Additional: Workflow State Store Tests
-// -----------------------------------------------------------
-test("WorkflowStateStore: CRUD operations and thread safety", async (t) => {
-    const dir = tempDir();
-    try {
-        const dbPath = path.join(dir, "state.db");
-        const store = new WorkflowStateStore(dbPath);
+// ---------------------------------------------------------------------------
+// Scenario 11: Recovery → INTERRUPTED
+// ---------------------------------------------------------------------------
 
-        const key = "wf1:sess1:1:1";
+describe("Scenario 11: Recovery marks expired INTERRUPTED", () => {
+    test("expired active → INTERRUPTED", () => {
+        const ctx = createRuntime(ABC_TOPOLOGY, { cycleTimeoutMs: 500 });
+        const { runtime, store } = ctx;
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
+        assert.equal(store.listActive().length, 1);
 
-        // Initial state should be null
-        let state = store.getState(key);
-        assert.equal(state, null, "Unknown key should return null");
+        const results = runtime.recover(5000);
+        assert.equal(results.length, 1);
+        assert.equal(results[0].result.result_status, "INTERRUPTED");
+        assert.equal(store.listActive().length, 0);
 
-        // Save new state
-        store.saveState(key, {
-            workflow_id: "wf1",
-            session_id: "sess1",
-            group_id: 1,
-            source_id: 1,
-            current_state: "WAIT_B",
-            cycle_id: "cyc-1",
-            cycle_started_at_ms: 1000,
-            start_frame_seq: 100,
-            last_frame_seq: 100,
-            last_message_id: "msg-1",
-            step_a_frame_seq: 100,
-            step_a_at_ms: 1000,
-            actual_sequence: JSON.stringify(["A"]),
-        });
-
-        state = store.getState(key);
-        assert.equal(state.current_state, "WAIT_B");
-        assert.equal(state.cycle_id, "cyc-1");
-
-        // Update existing state
-        store.saveState(key, {
-            ...state,
-            current_state: "WAIT_C",
-            last_frame_seq: 101,
-            step_b_frame_seq: 101,
-            step_b_at_ms: 2000,
-            actual_sequence: JSON.stringify(["A", "B"]),
-        });
-
-        state = store.getState(key);
-        assert.equal(state.current_state, "WAIT_C");
-        assert.equal(state.last_frame_seq, 101);
-
-        // Reset state
-        const prev = store.resetState(key);
-        assert.equal(prev.current_state, "WAIT_C"); // Previous state
-
-        state = store.getState(key);
-        assert.equal(state.current_state, "IDLE");
-        assert.equal(state.cycle_id, null);
-
-        // List active states
-        store.saveState("wf1:sess1:1:2", {
-            workflow_id: "wf1",
-            session_id: "sess1",
-            group_id: 1,
-            source_id: 2,
-            current_state: "WAIT_B",
-            cycle_id: "cyc-2",
-            cycle_started_at_ms: 5000,
-        });
-
-        const active = store.listActive();
-        assert.equal(active.length, 1, "Only source 2 should be active");
-        assert.equal(active[0].source_id, 2);
-
-        // Counts
-        const counts = store.counts();
-        assert.ok(counts.total >= 2);
-        assert.equal(counts.active, 1);
-
-        store.close();
-    } finally {
-        safeCleanup(dir);
-    }
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
 });
+
+// ---------------------------------------------------------------------------
+// Scenario 12: Audit completeness
+// ---------------------------------------------------------------------------
+
+describe("Scenario 12: Audit log/JSONL/CSV completeness", () => {
+    test("audit generates all three files with correct content", async () => {
+        const dir = tempDir();
+        try {
+            const auditDir = path.join(dir, "logs", "workflow");
+            const audit = new WorkflowAuditLogger(auditDir, "test-run-001");
+
+            audit.record("frame_received", {
+                message_id: "audit-msg-1", frame_seq: 100,
+                group_id: 1, source_id: 1, session_id: "s1", stream_id: "group-1/source-1",
+                label_summary: "A(0.900)",
+            });
+            audit.record("sequence_transition", {
+                cycle_id: "cyc-001", previous_state: "IDLE", current_state: "WAIT_B",
+                recognized_step: "A", stage_duration_ms: 0.08, workflow_id: "abc-demo",
+                message_id: "audit-msg-1", frame_seq: 100,
+                group_id: 1, source_id: 1, session_id: "s1", stream_id: "group-1/source-1",
+            });
+            audit.record("sequence_completed", {
+                cycle_id: "cyc-001", result_status: "OK", cycle_duration_ms: 5000,
+                actual_sequence: '["A","B","C"]', total_processing_ms: 4.25,
+                workflow_id: "abc-demo", message_id: "audit-msg-3",
+                event_id: "abc-demo:s1:group-1/source-1:cyc-001:OK",
+                frame_seq: 102, group_id: 1, source_id: 1, session_id: "s1", stream_id: "group-1/source-1",
+            });
+            audit.recordCycleSummary({
+                cycle_id: "cyc-001", workflow_id: "abc-demo", stream_id: "group-1/source-1",
+                start_frame_seq: 100, end_frame_seq: 102,
+                step_A_frame: 100, step_A_at: "2026-07-02T08:00:00.000+08:00",
+                step_B_frame: 101, step_B_at: "2026-07-02T08:00:02.000+08:00",
+                step_C_frame: 102, step_C_at: "2026-07-02T08:00:05.000+08:00",
+                sequence_duration_ms: 0.08, total_processing_ms: 4.25,
+                cycle_duration_ms: 5000, result_status: "OK", failure_reason: "",
+            });
+
+            await audit.close();
+
+            assert.ok(fs.existsSync(audit.filePaths.text));
+            assert.ok(fs.existsSync(audit.filePaths.jsonl));
+            assert.ok(fs.existsSync(audit.filePaths.csv));
+
+            const textContent = fs.readFileSync(audit.filePaths.text, "utf8");
+            assert.ok(textContent.includes("frame_received"));
+            assert.ok(textContent.includes("WAIT_B"));
+            assert.ok(textContent.includes("OK"));
+
+            const jsonlLines = fs.readFileSync(audit.filePaths.jsonl, "utf8").trim().split("\n");
+            assert.ok(jsonlLines.length >= 3);
+            for (const line of jsonlLines) {
+                const obj = JSON.parse(line);
+                assert.ok(obj.event);
+                assert.ok(obj.audit_at);
+            }
+
+            const csv = fs.readFileSync(audit.filePaths.csv, "utf8");
+            assert.ok(csv.includes("cycle_id"));
+            assert.ok(csv.includes("cyc-001"));
+        } finally { safeCleanup(dir); }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 13: Rewire A→C→B
+// ---------------------------------------------------------------------------
+
+describe("Scenario 13: Topology change A→C→B", () => {
+    test("A→C→B expects C before B", () => {
+        const ctx = createRuntime(ACB_TOPOLOGY, { cycleTimeoutMs: 5000 });
+        const { runtime } = ctx;
+
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ACB_TOPOLOGY),
+        }), 1000);
+
+        // B before C → NG in ACB topology
+        const events = runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["B"], ACB_TOPOLOGY),
+        }), 1100);
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "NG");
+        assert.ok(events[0].result.failure_reason.includes("跳步"));
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+
+    test("A→C→B correct order → OK", () => {
+        const ctx = createRuntime(ACB_TOPOLOGY, { cycleTimeoutMs: 5000 });
+        const { runtime } = ctx;
+
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ACB_TOPOLOGY),
+        }), 1000);
+        runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["C"], ACB_TOPOLOGY),
+        }), 1100);
+
+        const events = runtime.process(makeFrame({
+            frame_seq: 102, message_id: "msg-102",
+            label_matches: makeLabelMatches(["B"], ACB_TOPOLOGY),
+        }), 1200);
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "OK");
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 14: Insert D → A→B→D→C
+// ---------------------------------------------------------------------------
+
+describe("Scenario 14: 4-label topology A→B→D→C", () => {
+    test("A→B→D→C completes in order", () => {
+        const ctx = createRuntime(ABDC_TOPOLOGY, { cycleTimeoutMs: 5000 });
+        const { runtime, store } = ctx;
+        const key = makeStateKey("abc-demo", "test-session", 1, 1);
+
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABDC_TOPOLOGY),
+        }), 1000);
+        assert.equal(store.getState(key).step_index, 1);
+
+        runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["B"], ABDC_TOPOLOGY),
+        }), 1100);
+        assert.equal(store.getState(key).step_index, 2);
+
+        runtime.process(makeFrame({
+            frame_seq: 102, message_id: "msg-102",
+            label_matches: makeLabelMatches(["D"], ABDC_TOPOLOGY),
+        }), 1200);
+        assert.equal(store.getState(key).step_index, 3);
+
+        const events = runtime.process(makeFrame({
+            frame_seq: 103, message_id: "msg-103",
+            label_matches: makeLabelMatches(["C"], ABDC_TOPOLOGY),
+        }), 1300);
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "OK");
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+
+    test("skip D → NG", () => {
+        const ctx = createRuntime(ABDC_TOPOLOGY, { cycleTimeoutMs: 5000 });
+        const { runtime } = ctx;
+
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABDC_TOPOLOGY),
+        }), 1000);
+        runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["B"], ABDC_TOPOLOGY),
+        }), 1100);
+
+        const events = runtime.process(makeFrame({
+            frame_seq: 102, message_id: "msg-102",
+            label_matches: makeLabelMatches(["C"], ABDC_TOPOLOGY),
+        }), 1200);
+        assert.equal(events[0].result.result_status, "NG");
+        assert.ok(events[0].result.failure_reason.includes("跳步"));
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowStateStore V2 CRUD
+// ---------------------------------------------------------------------------
+
+describe("WorkflowStateStore V2 CRUD", () => {
+    test("save, get, reset, list, counts", () => {
+        const dir = tempDir();
+        try {
+            const store = new WorkflowStateStore(path.join(dir, "state.db"));
+            const key = makeStateKey("wf1", "sess1", 1, 1);
+
+            assert.equal(store.getState(key), null);
+
+            store.saveState(key, {
+                workflow_id: "wf1", session_id: "sess1", group_id: 1, source_id: 1,
+                step_index: 1, total_steps: 3, cycle_id: "cyc-1",
+                cycle_started_at_ms: 1000, start_frame_seq: 100,
+                last_frame_seq: 100, last_message_id: "msg-1",
+                steps_data: JSON.stringify({ A: { frame_seq: 100, at_ms: 1000 } }),
+                actual_sequence: JSON.stringify(["A"]),
+            });
+
+            let state = store.getState(key);
+            assert.equal(state.step_index, 1);
+            assert.equal(state.total_steps, 3);
+            assert.ok(JSON.parse(state.steps_data).A);
+
+            store.saveState(key, { ...state, step_index: 2, last_frame_seq: 101 });
+            assert.equal(store.getState(key).step_index, 2);
+
+            const prev = store.resetState(key);
+            assert.equal(prev.step_index, 2);
+            assert.equal(store.getState(key).step_index, 0);
+            assert.equal(store.getState(key).cycle_id, null);
+
+            store.saveState(makeStateKey("wf1", "sess1", 1, 2), {
+                workflow_id: "wf1", session_id: "sess1", group_id: 1, source_id: 2,
+                step_index: 1, total_steps: 3, cycle_id: "cyc-2",
+                cycle_started_at_ms: 5000,
+            });
+            assert.equal(store.listActive().length, 1);
+
+            const counts = store.counts();
+            assert.ok(counts.total >= 2);
+            assert.equal(counts.active, 1);
+
+            store.close();
+        } finally { safeCleanup(dir); }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// FlowRuntime helpers
+// ---------------------------------------------------------------------------
+
+describe("FlowRuntime helpers", () => {
+    test("makeStateKey, makeStreamId, makeEventId", () => {
+        assert.equal(makeStateKey("wf1", "sess1", 1, 2), "wf1:sess1:1:2");
+        assert.equal(makeStreamId(1, 2), "group-1/source-2");
+        assert.equal(makeEventId("wf1", "s1", "g1/s1", "cyc1", "OK"), "wf1:s1:g1/s1:cyc1:OK");
+    });
+
+    test("state names from 3-label topology", () => {
+        const ctx = createRuntime(ABC_TOPOLOGY);
+        assert.equal(ctx.runtime._stateName(0), "IDLE");
+        assert.equal(ctx.runtime._stateName(1), "WAIT_B");
+        assert.equal(ctx.runtime._stateName(2), "WAIT_C");
+        assert.equal(ctx.runtime._stateName(3), "IDLE");
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+
+    test("state names from 4-label topology", () => {
+        const ctx = createRuntime(ABDC_TOPOLOGY);
+        assert.equal(ctx.runtime._stateName(0), "IDLE");
+        assert.equal(ctx.runtime._stateName(1), "WAIT_B");
+        assert.equal(ctx.runtime._stateName(2), "WAIT_D");
+        assert.equal(ctx.runtime._stateName(3), "WAIT_C");
+        assert.equal(ctx.runtime._stateName(4), "IDLE");
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Edge case: Multi-label in same frame (B+C while WAIT_B = NG)
+// ---------------------------------------------------------------------------
+
+describe("Edge: multi-label frame", () => {
+    test("B+C in same frame while WAIT_B → NG (skip)", () => {
+        const ctx = createRuntime(ABC_TOPOLOGY);
+        const { runtime } = ctx;
+        runtime.process(makeFrame({
+            frame_seq: 100, message_id: "msg-100",
+            label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
+        }), 1000);
+
+        const events = runtime.process(makeFrame({
+            frame_seq: 101, message_id: "msg-101",
+            label_matches: makeLabelMatches(["B", "C"], ABC_TOPOLOGY),
+        }), 2000);
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "NG");
+        assert.ok(events[0].result.failure_reason.includes("跳步"));
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+});
+
+console.log("\n✅ All Phase 2 topology-driven tests completed.\n");

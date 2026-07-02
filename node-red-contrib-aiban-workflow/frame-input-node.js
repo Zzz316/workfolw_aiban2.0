@@ -1,3 +1,15 @@
+/**
+ * LEGACY (legacy-zmq-baseline): ZMQ SUB socket frame input node.
+ *
+ * This node receives frames from the Python ZMQ FrameBridge and injects them
+ * into Node-RED. It is NO LONGER part of the v2.0 main data path as of 2026-07-02.
+ *
+ * The new architecture replaces this with aiban-runtime, which directly spawns
+ * and manages the Python/AiBan child process via stdin/stdout JSON Lines.
+ * See: WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md, docs/LEGACY_ZMQ_MIGRATION.md
+ *
+ * DO NOT add new features to this node. Preserved for rollback reference only.
+ */
 "use strict";
 
 const path = require("node:path");

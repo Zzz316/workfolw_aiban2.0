@@ -2,9 +2,9 @@
     {
         "id": "phase2-abc-tab",
         "type": "tab",
-        "label": "Phase 2: A-B-C 顺序检测",
+        "label": "Phase 2: A-B-C 拓扑驱动顺序检测",
         "disabled": false,
-        "info": "最小闭环示例: aiban-frame-input → aiban-label-match → aiban-abc-sequence → aiban-result-db\n\n验证 A→B→C 顺序识别、乱序检测、超时处理和幂等入库。"
+        "info": "拓扑驱动最小闭环: aiban-frame-input → aiban-label (A) → aiban-label (B) → aiban-label (C) → aiban-result → aiban-result-db\n\n验证要点:\n- A/B/C 是三个独立可拖放的 aiban-label 组件\n- 顺序由画布连线拓扑表达，不在任何组件中配置 steps 数组\n- 改变连线 (如 A→C→B) 即可改变期望顺序\n- aiban-result 自动从连线发现拓扑并管理状态机"
     },
     {
         "id": "frame-input-abc",
@@ -15,45 +15,63 @@
         "inboxPath": "data/frame_bridge/inbox.db",
         "showLatency": true,
         "logEvery": "10",
-        "x": 150,
+        "x": 130,
         "y": 200,
         "wires": [
-            ["label-match-abc"],
+            ["label-a"],
             ["debug-screenshot-abc"]
         ]
     },
     {
-        "id": "label-match-abc",
-        "type": "aiban-label-match",
+        "id": "label-a",
+        "type": "aiban-label",
         "z": "phase2-abc-tab",
-        "name": "标签匹配 A/B/C",
-        "workflow_id": "abc-sequence-demo",
-        "steps": [
-            { "id": "A", "model_id": "1", "label": "A", "confidence": 0.5 },
-            { "id": "B", "model_id": "1", "label": "B", "confidence": 0.5 },
-            { "id": "C", "model_id": "1", "label": "C", "confidence": 0.5 }
-        ],
-        "unmatchedLogLevel": "none",
-        "x": 350,
+        "name": "标签 A",
+        "label_id": "A",
+        "model_id": "1",
+        "label": "A",
+        "confidence": 0.5,
+        "x": 310,
         "y": 200,
-        "wires": [["abc-sequence-abc"]]
+        "wires": [["label-b"]]
     },
     {
-        "id": "abc-sequence-abc",
-        "type": "aiban-abc-sequence",
+        "id": "label-b",
+        "type": "aiban-label",
         "z": "phase2-abc-tab",
-        "name": "A→B→C 状态机",
+        "name": "标签 B",
+        "label_id": "B",
+        "model_id": "1",
+        "label": "B",
+        "confidence": 0.5,
+        "x": 470,
+        "y": 200,
+        "wires": [["label-c"]]
+    },
+    {
+        "id": "label-c",
+        "type": "aiban-label",
+        "z": "phase2-abc-tab",
+        "name": "标签 C",
+        "label_id": "C",
+        "model_id": "1",
+        "label": "C",
+        "confidence": 0.5,
+        "x": 630,
+        "y": 200,
+        "wires": [["result-abc"]]
+    },
+    {
+        "id": "result-abc",
+        "type": "aiban-result",
+        "z": "phase2-abc-tab",
+        "name": "结果判定",
         "workflow_id": "abc-sequence-demo",
-        "steps": [
-            { "id": "A", "model_id": "1", "label": "A", "confidence": 0.5 },
-            { "id": "B", "model_id": "1", "label": "B", "confidence": 0.5 },
-            { "id": "C", "model_id": "1", "label": "C", "confidence": 0.5 }
-        ],
         "cycle_timeout_ms": "30000",
         "allow_same_frame_restart": false,
-        "stateDbPath": "data/workflow/abc-state.db",
+        "stateDbPath": "data/workflow/flow-state.db",
         "auditDir": "logs/workflow",
-        "x": 550,
+        "x": 790,
         "y": 200,
         "wires": [["result-db-abc"]]
     },
@@ -66,7 +84,7 @@
         "maxRetries": "3",
         "retryDelayMs": "500",
         "queueSize": "1000",
-        "x": 750,
+        "x": 950,
         "y": 200,
         "wires": [["debug-result-abc"]]
     },
@@ -83,7 +101,7 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 930,
+        "x": 1110,
         "y": 200,
         "wires": []
     },
@@ -100,12 +118,12 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 350,
+        "x": 310,
         "y": 280,
         "wires": []
     },
     {
-        "id": "inject-test-abc",
+        "id": "inject-test-a",
         "type": "inject",
         "z": "phase2-abc-tab",
         "name": "测试: A 帧",
@@ -121,8 +139,8 @@
         "once": false,
         "onceDelay": 0.1,
         "topic": "",
-        "x": 150,
-        "y": 140,
+        "x": 130,
+        "y": 120,
         "wires": [["frame-input-abc"]]
     },
     {
@@ -142,8 +160,8 @@
         "once": false,
         "onceDelay": 0.1,
         "topic": "",
-        "x": 150,
-        "y": 180,
+        "x": 130,
+        "y": 160,
         "wires": [["frame-input-abc"]]
     },
     {
@@ -163,8 +181,8 @@
         "once": false,
         "onceDelay": 0.1,
         "topic": "",
-        "x": 150,
-        "y": 220,
+        "x": 130,
+        "y": 240,
         "wires": [["frame-input-abc"]]
     }
 ]

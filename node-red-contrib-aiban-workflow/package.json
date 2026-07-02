@@ -1,7 +1,7 @@
 {
   "name": "node-red-contrib-aiban-workflow",
-  "version": "1.1.0",
-  "description": "Node-RED nodes for Aiban Workflow Engine — Phase 2 Runtime Execution",
+  "version": "1.2.0",
+  "description": "Node-RED nodes for Aiban Workflow Engine — Phase 2 Topology-Driven Runtime",
   "main": "sequence-node.js",
   "scripts": {
     "test": "node --test test/*.test.js",
@@ -27,8 +27,8 @@
       "workflow-api-trigger": "api-trigger-node.js",
       "workflow-api-output": "api-output-node.js",
       "aiban-frame-input": "frame-input-node.js",
-      "aiban-label-match": "aiban-label-match.js",
-      "aiban-abc-sequence": "aiban-abc-sequence.js",
+      "aiban-label": "aiban-label.js",
+      "aiban-result": "aiban-result.js",
       "aiban-result-db": "aiban-result-db.js"
     }
   },

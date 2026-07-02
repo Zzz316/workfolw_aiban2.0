@@ -1,0 +1,101 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-result", {
+        category: "艾班工作流",
+        color: "#FFA07A",
+        defaults: {
+            name: { value: "结果判定" },
+            workflow_id: { value: "abc-sequence-demo" },
+            cycle_timeout_ms: { value: 30000 },
+            allow_same_frame_restart: { value: false },
+            stateDbPath: { value: "data/workflow/flow-state.db" },
+            auditDir: { value: "logs/workflow" },
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-flag-checkered",
+        paletteLabel: "aiban result",
+        label: function () {
+            return this.name || "结果判定";
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-result">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-flag-checkered"></i> 名称</label>
+        <input type="text" id="node-input-name" placeholder="结果判定">
+    </div>
+    <div class="form-row">
+        <label for="node-input-workflow_id"><i class="fa fa-sitemap"></i> Workflow ID</label>
+        <input type="text" id="node-input-workflow_id" placeholder="abc-sequence-demo">
+        <span class="form-tip">流程标识符，用于状态隔离和审计日志。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-cycle_timeout_ms"><i class="fa fa-clock-o"></i> 周期超时 (ms)</label>
+        <input type="text" id="node-input-cycle_timeout_ms" placeholder="30000">
+        <span class="form-tip">从识别到第一个标签开始，超过此时限未完成则判定为 TIMEOUT。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-allow_same_frame_restart">
+            <input type="checkbox" id="node-input-allow_same_frame_restart" style="width: auto; display: inline;">
+            同帧重启
+        </label>
+        <span class="form-tip">允许在同一帧中完成上一周期后立即启动新周期 (默认关闭)。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-stateDbPath"><i class="fa fa-database"></i> 状态数据库路径</label>
+        <input type="text" id="node-input-stateDbPath" placeholder="data/workflow/flow-state.db">
+    </div>
+    <div class="form-row">
+        <label for="node-input-auditDir"><i class="fa fa-folder"></i> 审计日志目录</label>
+        <input type="text" id="node-input-auditDir" placeholder="logs/workflow">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="aiban-result">
+    <h3>aiban-result — 拓扑驱动结果判定</h3>
+    <p>放置在 aiban-label 链的末端，自动从画布连线发现标签拓扑，
+    管理多帧顺序识别的状态机，并输出终端事件 (OK/NG/TIMEOUT/INTERRUPTED)。</p>
+
+    <h4>拓扑发现</h4>
+    <p>部署时，此节点会从输入端口沿连线向上游追溯所有 <b>aiban-label</b> 节点，
+    构建有序执行计划：</p>
+    <pre>[frame-input] → [标签 A] → [标签 B] → [标签 C] → <b>[result]</b></pre>
+    <p>编译拓扑: <b>A → B → C</b> (3 个标签，动态生成状态 WAIT_B, WAIT_C)</p>
+
+    <h4>状态机</h4>
+    <ul>
+        <li><b>IDLE</b>: 等待第一个标签 (A)</li>
+        <li><b>WAIT_B</b>: A 已匹配，等待 B</li>
+        <li><b>WAIT_C</b>: A→B 已匹配，等待 C</li>
+        <li>全部匹配 → <b>OK</b></li>
+        <li>乱序/跳步 → <b>NG</b></li>
+        <li>超时 → <b>TIMEOUT</b></li>
+    </ul>
+    <p>状态按 (workflow_id + session_id + group_id + source_id) 隔离。</p>
+
+    <h4>输出</h4>
+    <p>仅输出 <b>终端事件</b> (OK/NG/TIMEOUT/INTERRUPTED)，
+    包含 <code>msg.abc_result</code> 完整字段。
+    过渡事件通过 WorkflowAuditLogger 异步记录到审计日志。</p>
+
+    <h4>配置</h4>
+    <ul>
+        <li><b>Workflow ID</b>: 流程标识符，用于状态隔离。</li>
+        <li><b>周期超时</b>: 从匹配第一个标签开始的超时时间 (毫秒)。</li>
+        <li><b>同帧重启</b>: 是否允许完成周期后立即使用同帧数据启动新周期。</li>
+        <li><b>状态数据库路径</b>: SQLite 数据库路径 (相对于 userDir)。</li>
+        <li><b>审计日志目录</b>: 审计日志输出目录。</li>
+    </ul>
+
+    <h4>手动重置</h4>
+    <p>发送 <code>msg.topic === "aiban-reset"</code> 的消息来手动重置指定 source 的状态：</p>
+    <pre>msg.payload = {
+  workflow_id: "abc-demo",
+  session_id: "sess1",
+  group_id: 1,
+  source_id: 1,
+  reason: "手动干预",
+  operator: "admin"
+}</pre>
+</script>

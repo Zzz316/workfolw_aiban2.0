@@ -1,13 +1,21 @@
 """
-系统统一启动入口
------------------
-  python main.py
+LEGACY (legacy-zmq-baseline): System unified startup entry.
 
-进程模型：
+This is the old v1.0/early-v2.0 entry point that starts the ZMQ-based architecture:
+  Python → multiprocessing → ZMQ DEALER/ROUTER → Node-RED frame-input node.
+
+Process model:
   主进程
   ├── Process: videowork   — 视频推理
   ├── Process: videoalarm  — 报警写库
   └── Thread:  Flask       — Web API (icameraapi)
+
+AS OF 2026-07-02, this entry point is NO LONGER the main startup path.
+The new v2.0 architecture uses Node-RED as the startup entry via aiban-runtime,
+which spawns Python as a child process over stdin/stdout JSON Lines.
+
+See: WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md, docs/LEGACY_ZMQ_MIGRATION.md
+DO NOT add new features here. Preserved for rollback reference only.
 """
 
 import sys

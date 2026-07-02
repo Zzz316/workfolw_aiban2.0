@@ -1,1213 +1,622 @@
-# AiBan Workflow 2.0 开发计划书（AI 协作版）
+# AiBan Workflow 2.0 开发计划书
 
-> 文档版本：v1.1
-> 编制日期：2026-06-29
-> 最近更新：2026-07-01
+> 文档版本：v2.0（架构重启版）
+> 编制日期：2026-07-02
+> 当前阶段：退回阶段一重新实施
 > 工作目录：`D:\workfolw_aiban_2.0`
-> 目标仓库：`https://github.com/Zzz316/workfolw_aiban2.0.git`
-> 目标：将工作流执行逻辑从 Python 引擎迁移到 Node-RED，使流程在 Node-RED 中配置后可直接运行。
 
 ---
 
-## 1. 文档用途
+## 1. 本次调整结论
 
-本文档是 Workflow 2.0 的开发总纲，也用于向后续 AI 大模型、开发人员和测试人员传递完整上下文。
-
-任何参与开发的 AI 在修改代码前，都必须：
-
-1. 阅读本文档。
-2. 阅读 `WORKFLOW_DOC.md`，了解 1.0 已有功能。
-3. 查看当前 Git 分支、工作区状态和最近提交。
-4. 不得删除或弱化 1.0 已有业务能力，除非有明确迁移方案和回归测试。
-5. 每次只完成一个边界清楚、可以验证的开发任务。
-6. 修改后执行对应测试，记录结果，再提交并推送。
-
----
-
-## 2. 输入资料
-
-### 2.1 Workflow 1.0 功能基线
-
-文件：
+原方案采用：
 
 ```text
-D:\workfolw_aiban_2.0\WORKFLOW_DOC.md
-```
-
-该文档描述当前 Python 工作流引擎、工作流 JSON、Node-RED 导出、自定义流程、顺序检测、计时、安环监控、数据库、报警、喇叭、API 和周期记录等功能。
-
-### 2.2 Workflow 2.0 参考方案
-
-文件：
-
-```text
-C:\Users\s2017088\Desktop\WORKFLOW_V2_PLAN.md
-```
-
-该方案提出 Python 向 Node-RED 推送推理事件，由 Node-RED 执行业务工作流。本计划保留该方向，但不采用“HWM 超限自动丢弃”的设计，因为它不能满足不丢帧要求。
-
-### 2.3 AiBan SDK 手册
-
-文件：
-
-```text
-C:\Users\s2017088\Desktop\艾班sdk手册\AiBanVideo3.0_API(解密).pdf
-```
-
-已知 SDK 信息：
-
-- Python 模块：`libAiBanVideoPy3_9`
-- SDK Python 包装版本：AIBANVIDEOPY 3.1.1
-- 支持 Python 3.7、3.8、3.9、3.10
-- 引擎入口：`aibanVideoGetInstance()`
-- `metadata` 只在推理回调执行期间有效
-- SDK 回调由内部工作线程调用，回调中不能执行耗时或阻塞操作
-- YAML 配置不支持运行时热更新
-- 截图保存为异步操作
-
----
-
-## 3. 当前系统（1.0）
-
-### 3.1 当前执行链
-
-```text
-Node-RED 编辑流程
-    ↓
-导出工作流 JSON
-    ↓
-Python WorkflowEngine 加载 JSON
-    ↓
-Python Runner 执行业务状态和动作
-```
-
-### 3.2 当前进程结构
-
-```text
-main.py
-├── videowork 进程：SDK pipeline、推理回调、Python WorkflowEngine
-├── videoalarm 进程：报警、数据库、Socket、API 输出
-└── Flask 线程：Web API
-```
-
-### 3.3 1.0 必须迁移的功能
-
-| 功能 | 1.0 实现 | 2.0 目标 |
-|---|---|---|
-| 自定义状态机 | Python `StateMachineRunner` | Node-RED 原子节点组合 |
-| 工时计时 | Python `TimerRecordRunner` | Node-RED timer-record 流程 |
-| 顺序检测 | Python `SequenceRunner` | Node-RED sequence 节点/子流 |
-| 安环监控 | Python `MonitorRunner` | Node-RED monitor 节点 |
-| Python handler | Python `PythonRunner` | 保留兼容桥或逐步迁移 |
-| 报警 | Python alarm action | Node-RED alarm 节点 |
-| 截图 | Python metadata 调用 | Node-RED 请求、Python SDK 执行 |
-| 数据库存储 | Python DB 操作 | Node-RED save-db/cycle-record |
-| 喇叭 | Python Socket | Node-RED speaker 节点 |
-| API 输入 | Python HTTP server | Node-RED api-trigger |
-| API 输出 | Python requests | Node-RED api-output |
-| 周期记录 | Python sequence 扩展 | Node-RED cycle-record |
-| 流程热更新 | Python 监听 JSON | Node-RED Deploy |
-
----
-
-## 4. 2.0 目标与非目标
-
-### 4.1 核心目标
-
-```text
-Node-RED 中配置流程
-    ↓ Deploy
-流程立即由 Node-RED 执行
-```
-
-不再经过：
-
-```text
-Node-RED 导出 JSON → Python 读取 JSON → Python 执行流程
-```
-
-### 4.2 职责边界
-
-Python 只负责：
-
-- AiBan SDK 初始化、启动、停止。
-- 从 SDK 回调中提取单帧 metadata。
-- 将 SDK 对象转换为普通、可序列化数据。
-- 管理截图请求和截图结果。
-- 管理视频源暂停与恢复。
-- 向 Node-RED 可靠传输帧数据。
-- 上报 SDK 和通信健康状态。
-
-Node-RED 负责：
-
-- label/confidence/模型匹配。
-- 二阶模型匹配。
-- 计数、持续时间、N 帧累计。
-- 顺序、状态机、循环和条件判断。
-- 报警去重。
-- 数据库存储和周期记录。
-- 喇叭、API 输入输出等业务动作。
-- 工作流配置、部署和运行状态展示。
-
-### 4.3 非目标
-
-- 第一阶段不删除 Python 1.0 工作流引擎。
-- 第一阶段不一次性迁移全部业务节点。
-- 不承诺在无限断网、无限磁盘空间和永久停机条件下“绝对不丢帧”。
-- 不允许通过静默丢帧换取低延迟。
-
----
-
-## 5. 目标架构
-
-```text
-AiBan SDK Pipeline
-    │ videoResultFunc
-    ▼
-Python Frame Adapter
-    │ 仅复制和标准化 metadata
-    ▼
-内存接入队列
-    ▼
-SQLite WAL Durable Outbox
-    ▼
-ZeroMQ 可靠发送层
-    │ 帧消息 / ACK / 重传 / 心跳
-    ▼
-Node-RED aiban-frame-input
-    ▼
-SQLite WAL Durable Inbox
-    │ 持久化成功后返回 ACK
-    ▼
-Node-RED 工作流
-    ├── detect / sub-detect
-    ├── counter / timer / state / condition
-    ├── sequence / monitor / cycle-record
-    └── alarm / save-db / speaker / api-output
-```
-
-### 5.1 为什么不能直接使用 ZeroMQ PUSH/PULL
-
-单纯 PUSH/PULL 不提供业务级确认。发送成功只表示消息进入 ZeroMQ 队列，不表示 Node-RED 已持久化或处理。
-
-本项目需要：
-
-- 应用层 ACK。
-- 发送端持久化。
-- 接收端持久化。
-- 超时重传。
-- 唯一键去重。
-- 断点续传。
-- 序号缺口检测。
-
-ZeroMQ 可以继续作为底层传输，但不能只依赖其内存队列和 HWM。
-
----
-
-## 6. AiBan SDK 接口约束
-
-### 6.1 正确初始化顺序
-
-```python
-engine = AiBanVideoPy.aibanVideoGetInstance()
-engine.loggerSetLevel(...)
-engine.loggerSetSaveDirectory(...)
-engine.registerVideoResultFunc(on_result)
-engine.registerVideoSaveImageFunc(on_save_image)
-engine.registerVideoMsgEventFunc(on_event)
-rc = engine.checkAllConfig(yaml_path)
-rc = engine.buildPipline()
-```
-
-所有回调必须在 `buildPipline()` 前注册，否则可能丢失首批帧或首批状态事件。
-
-### 6.2 推理回调
-
-```python
-def videoResultFunc(
-    err: bool,
-    groupid: int,
-    sourceid: int,
-    metadata: IAibanVideoMetaData
-) -> None:
-    ...
-```
-
-语义：
-
-- `err is True`：本次推理出错，不能使用 metadata。
-- `err is False`：本次推理正常。
-
-### 6.3 Metadata 接口
-
-```python
-metadata.getAllModelInferBoxes()
-metadata.getModelInferBoxs(modelid)
-metadata.saveImage(save_roi)
-metadata.getSaveImagePath()
-metadata.getTimeFlagDatetime()
-```
-
-检测框常用接口：
-
-```python
-box.getLabelName()
-box.getLabelIndex()
-box.getConfidence()
-box.getPolygon()
-box.getMaskRegionContoursPoints()
-box.getTrackerId()
-box.getInferBoxWithModelID(sub_id)
-```
-
-### 6.4 Metadata 生命周期
-
-`metadata` 仅在 `videoResultFunc` 回调期间有效。
-
-禁止：
-
-```python
-queue.put(metadata)
-```
-
-必须在回调内完成：
-
-```text
-SDK metadata
-→ 读取所有需要的模型和检测框
-→ 转成 dict/list/str/int/float/bool
-→ 把纯 Python 数据放入队列
-```
-
-### 6.5 回调线程限制
-
-SDK 回调内禁止：
-
-- 发送网络请求。
-- 等待 Node-RED ACK。
-- 访问数据库。
-- 执行业务工作流。
-- 上传图片。
-- 阻塞式等待队列空间。
-- 长时间持有锁。
-
-回调的目标性能：
-
-```text
-P95 < 2 ms
-P99 < 5 ms
-```
-
-实际阈值应在目标设备、目标摄像头数量和实际模型输出量下压测确认。
-
-### 6.6 截图
-
-```python
-metadata.saveImage(save_roi=False)
-```
-
-截图为异步操作。是否真正保存成功，以 `videoSaveImageFunc` 为准：
-
-```python
-def videoSaveImageFunc(groupid, sourceid, filepath, cvmat):
-    ...
-```
-
-Node-RED 截图请求必须包含 `request_id`，Python 返回截图完成事件时携带同一 ID。
-
-### 6.7 视频源控制
-
-```python
-engine.sourceControl(group_id, source_id, False)  # 暂停
-engine.sourceControl(group_id, source_id, True)   # 恢复
-```
-
-当可靠队列接近容量或磁盘达到安全水位时，系统必须优先暂停对应视频源，不得静默丢帧。
-
-### 6.8 Pipeline 配置和停止
-
-- `checkAllConfig()` 返回值必须与 `aSUCCESS` 比较。
-- `buildPipline()`启动内部线程后通常返回。
-- 退出进程前必须调用 `stopPipline()`。
-- `stopPipline()`可能阻塞，不能在 SDK 回调中调用。
-- YAML 修改后必须执行：
-
-```text
-stopPipline
-→ checkAllConfig
-→ buildPipline
-```
-
-Node-RED 流程可以热 Deploy，但 SDK YAML 不能伪装成热更新。
-
----
-
-## 7. 第一阶段：可靠帧通道
-
-第一阶段只建立 AiBan 到 Node-RED 的可靠数据通道，不迁移复杂业务逻辑。
-
-### 7.1 第一阶段交付物
-
-```text
-core/frame_bridge/
-├── __init__.py
-├── adapter.py
-├── protocol.py
-├── ingress_queue.py
-├── durable_outbox.py
-├── zmq_transport.py
-├── source_backpressure.py
-├── screenshot_service.py
-├── metrics.py
-└── config.py
-
-node-red-contrib-aiban-workflow/
-├── package.json
-├── nodes/
-│   ├── aiban-frame-input.js
-│   └── aiban-frame-input.html
-└── test/
-
-docs/
-├── FRAME_PROTOCOL.md
-├── OPERATIONS.md
-└── TEST_REPORT_PHASE_1.md
-```
-
-目录名称可以根据项目实际情况调整，但职责不能混淆。
-
-### 7.2 帧协议
-
-建议帧消息：
-
-```json
-{
-  "type": "frame",
-  "schema_version": 1,
-  "message_id": "session-id:group-1:source-1:10241",
-  "session_id": "uuid",
-  "stream_id": "group-1/source-1",
-  "frame_seq": 10241,
-  "captured_at": "2026-06-29T12:00:00.123+08:00",
-  "captured_monotonic_ns": 1234567890,
-  "group_id": 1,
-  "source_id": 1,
-  "models": {
-    "1": {
-      "ok": true,
-      "boxes": [
-        {
-          "label": "person",
-          "label_index": 0,
-          "confidence": 0.94,
-          "polygon": [[10, 20], [100, 20], [100, 200], [10, 200]],
-          "tracker_id": 27,
-          "mask_contours": [],
-          "sub_models": {}
-        }
-      ]
-    }
-  },
-  "checksum": "sha256-value"
-}
-```
-
-要求：
-
-- `session_id`：每次 pipeline 启动生成。
-- `frame_seq`：每路视频源独立、严格递增。
-- `message_id`：全局幂等键。
-- `captured_at`：业务时间。
-- `captured_monotonic_ns`：本机延迟计算，避免系统时钟回拨。
-- `checksum`：校验序列化后的核心载荷。
-
-### 7.3 ACK 协议
-
-```json
-{
-  "type": "ack",
-  "schema_version": 1,
-  "session_id": "uuid",
-  "stream_id": "group-1/source-1",
-  "frame_seq": 10241,
-  "message_id": "session-id:group-1:source-1:10241",
-  "persisted_at": "2026-06-29T12:00:00.150+08:00"
-}
-```
-
-ACK 只能在 Node-RED 接收端完成持久化之后发送，不能在刚收到网络数据时提前发送。
-
-### 7.4 发送端状态
-
-Outbox 至少包含：
-
-| 字段 | 说明 |
-|---|---|
-| `message_id` | 唯一键 |
-| `session_id` | pipeline 会话 |
-| `stream_id` | 视频流 |
-| `frame_seq` | 帧序号 |
-| `payload` | 序列化数据 |
-| `created_at` | 入队时间 |
-| `send_count` | 已发送次数 |
-| `last_sent_at` | 最近发送时间 |
-| `acked_at` | 确认时间 |
-
-状态：
-
-```text
-NEW → PERSISTED → SENT → ACKED
-                    └→ RETRY
-```
-
-### 7.5 接收端状态
-
-Node-RED inbox 使用 `message_id` 唯一约束：
-
-```text
-收到消息
-→ checksum 校验
-→ inbox INSERT OR IGNORE
-→ 提交事务
-→ 返回 ACK
-→ 按 stream_id/frame_seq 投递到流程
-```
-
-重发消息不得重复触发业务。
-
-### 7.6 背压策略
-
-必须配置两级水位：
-
-```text
-低水位 < 高水位 < 紧急水位
-```
-
-- 低于低水位：正常运行。
-- 达到高水位：告警并准备暂停对应 source。
-- 达到紧急水位：调用 `sourceControl(..., False)`。
-- 回落到低水位并持续稳定一段时间：调用 `sourceControl(..., True)`。
-
-暂停和恢复动作必须防抖，避免频繁启停。
-
-### 7.7 “不丢帧”的工程定义
-
-在以下约束内保证不静默丢帧：
-
-- 本地磁盘可写且未耗尽。
-- SDK 允许在队列达到危险水位前暂停视频源。
-- Python 进程和机器没有发生无法恢复的物理损坏。
-- Node-RED 恢复后能够处理积压。
-
-如果系统无法继续接收，必须：
-
-1. 记录明确错误。
-2. 上报告警。
-3. 暂停视频源。
-4. 保留已持久化数据。
-
-不得继续运行并丢弃旧帧。
-
-### 7.8 “不超时”的工程定义
-
-不把业务超时等同于消息丢失：
-
-- ACK 超时：重传，不删除。
-- Node-RED 离线：积压，不删除。
-- 网络中断：重连并重放。
-- Node-RED 处理慢：触发背压。
-
-正常负载初始指标：
-
-| 指标 | 目标 |
-|---|---|
-| SDK 回调 P99 | `< 5 ms` |
-| 帧端到端延迟 P95 | `< 100 ms` |
-| 帧端到端延迟 P99 | `< 300 ms` |
-| 正常运行序号缺口 | `0` |
-| 静默丢帧 | `0` |
-| 重复业务执行 | `0` |
-
-这些指标必须通过现场硬件压测校准。
-
-### 7.9 第一阶段测试
-
-必须覆盖：
-
-1. 单路视频持续运行 24 小时。
-2. 现场最大摄像头路数压力测试。
-3. 单帧大量检测框。
-4. Node-RED 停止 1 分钟、5 分钟、30 分钟后恢复。
-5. Python 发送进程重启。
-6. Node-RED 进程重启。
-7. 网络中断、延迟、抖动。
-8. 重复消息。
-9. ACK 丢失。
-10. 乱序到达。
-11. 慢消费者。
-12. 磁盘达到高水位。
-13. source 暂停和恢复。
-14. pipeline 正常停止和重新启动。
-15. 授权失败和模型加载失败。
-
-对账公式：
-
-```text
-Python 已持久化唯一帧数
-= Node-RED 已持久化唯一帧数
- + Python 当前未确认帧数
-```
-
-第一阶段完成条件：
-
-- 所有必测场景通过。
-- 序号缺口为 0。
-- 重传不造成重复流程执行。
-- Node-RED 重启后自动恢复。
-- source 背压有效。
-- 有测试报告和复现命令。
-
----
-
-## 8. 后续开发阶段
-
-### 阶段 0：仓库与基线
-
-任务：
-
-- 修复或初始化 Git 仓库。
-- 关联目标 GitHub remote。
-- 创建 `v2.0-node-red-runtime` 分支。
-- 找回或迁入 `node-red-contrib-aiban-workflow` 源码。
-- 清理旧绝对路径。
-- 建立 1.0 功能回归清单。
-- 为当前 1.0 创建可回退标签。
-
-已发现问题：
-
-- 2026-06-29 检查时，当前目录不是有效 Git 工作区。
-- `node-red/package.json` 指向旧路径：
-
-```text
-D:/workfolw_aiban/node-red-contrib-aiban-workflow
-```
-
-- 当前工作目录中未发现该自定义节点包源码。
-
-### 阶段 1：可靠帧通道
-
-按本文第 7 节执行。
-
-### 阶段 2：A-B-C 顺序识别最小闭环
-
-#### 8.2.1 阶段目标
-
-阶段 2 不再以一次性开发全部基础原子节点为目标，而是优先实现一个可运行、可观测、可落库、可自动测试的最小业务闭环：
-
-```text
-AiBan SDK 识别标签
-→ Python FrameBridge 可靠传输
+Python 常驻进程
+→ AiBan SDK 回调
+→ SQLite Outbox
+→ ZeroMQ
 → Node-RED aiban-frame-input
-→ 标签过滤/匹配
-→ A-B-C 顺序状态机
-→ 生成 OK 或 NG 结果
-→ 幂等写入 MySQL
-→ 输出全过程处理日志和阶段耗时
+→ SQLite Inbox
+→ 下游业务组件
 ```
 
-本阶段的目的，是验证 Node-RED 已经能够真正承担最小业务流程的执行职责，而不只是接收和显示推理帧。
+现调整为：
 
-#### 8.2.2 最小节点范围
+```text
+Node-RED aiban-runtime 组件
+→ 启动并管理 Python 子进程
+→ Python 初始化 AiBan SDK 并执行推理
+→ 通过本机标准输入/输出传递控制命令和推理事件
+→ aiban-runtime 将结果转换为 Node-RED msg
+→ 直接发送给下一个组件
+```
 
-本阶段只开发或整理闭环必需能力：
+Node-RED 成为系统的启动入口、运行主控和业务工作流引擎。Python 不再主动通过
+ZeroMQ 向 Node-RED 发送数据，而是作为 Node-RED 组件管理的 AiBan SDK 适配子进程。
 
-1. `aiban-frame-input`：复用阶段 1 已完成的可靠帧入口。
-2. `aiban-label-match`：从标准化帧中按 `model_id + label + confidence` 判断 A、B、C 标签是否出现。
-3. `aiban-sequence`：执行严格的 A → B → C 顺序状态机。
-4. `aiban-result-db`：将一次流程的最终结果幂等写入 MySQL。
-5. `aiban-workflow-audit`：异步记录各阶段事件、状态变化和实际处理耗时。
-6. 一份可直接导入或随项目部署的最小示例流程：`frame-input → label-match → sequence → result-db`。
+本项目从阶段一重新开始。现有阶段一、阶段二的完成状态作废，必须按本计划重新开发、
+测试和验收。
 
-允许复用并重构现有 `sequence-node.js`，但不得继续让它只负责“导出 Python 工作流 JSON”；阶段 2 的顺序判断必须在 Node-RED 运行时直接执行。
+---
 
-`camera-filter`、`sub-detect`、`counter`、`timer`、通用 `state/condition/reset` 等不属于本阶段必交付项，除非它们是实现上述最小闭环不可缺少的内部模块。
+## 2. 调整目标
 
-#### 8.2.3 A-B-C 业务规则
+### 2.1 核心目标
 
-默认示例配置：
+1. 用户在 Node-RED 中拖入一个 `aiban-runtime` 组件。
+2. 组件配置 Python 路径、SDK 路径和 Pipeline YAML。
+3. Deploy 后，组件直接启动 Python 子进程并初始化 AiBan。
+4. Python 收到 SDK 推理回调后输出标准事件。
+5. `aiban-runtime` 把事件封装成 `msg`，通过 Node-RED 连线直接交给下游组件。
+6. Node-RED Deploy、停止、重启时，Python 和 AiBan Pipeline 生命周期受控。
+7. 后续标签、顺序、计时、报警、数据库等业务全部由 Node-RED 组件和连线表达。
+
+### 2.2 不再采用的主链路
+
+以下模块不再属于新架构主链路：
+
+- Python FrameBridge 主动发送。
+- ZeroMQ DEALER/ROUTER。
+- Python SQLite Durable Outbox。
+- Node-RED SQLite Durable Inbox。
+- 帧 ACK、网络重传和 ZMQ 心跳。
+- 独立启动 `main.py` 后等待 Node-RED 接收推理帧。
+
+现有代码暂不立即删除，统一标记为 `legacy-zmq-bridge`，用于迁移对照和必要回退。
+完成新阶段一验收后，再单独评审删除范围。
+
+### 2.3 本阶段非目标
+
+- 不在阶段一迁移全部 1.0 业务能力。
+- 不在阶段一重写标签、顺序、计时、报警等业务节点。
+- 不允许把通用业务逻辑重新放回 Python。
+- 不允许 Node-RED Function 节点直接拼接不受控的 SDK 启动命令。
+- 第一阶段仅支持 Node-RED 与 Python 在同一台设备上运行。
+
+---
+
+## 3. 新总体架构
+
+```text
+Node-RED
+└── aiban-runtime（配置节点/输入节点）
+    ├── 校验配置
+    ├── child_process.spawn(Python)
+    ├── 写入控制命令（stdin，JSON Lines）
+    ├── 读取推理事件（stdout，JSON Lines）
+    ├── 读取运行日志（stderr）
+    ├── 管理启动、停止、重启和健康状态
+    └── node.send(msg)
+          ↓
+      aiban-label
+          ↓
+      counter / timer / state / sequence / monitor
+          ↓
+      alarm / save-db / speaker / api-output
+```
+
+### 3.1 Node-RED 职责
+
+- 保存并校验 Python、SDK、YAML 等运行配置。
+- 创建、监控和停止 Python 子进程。
+- 防止同一 Pipeline 被重复启动。
+- 将控制消息写入 Python 标准输入。
+- 解析 Python 标准输出中的协议事件。
+- 将推理帧转换为标准 Node-RED 消息并发送给下游。
+- 显示启动中、运行中、停止、异常、重启中的节点状态。
+- 执行标签匹配、顺序、状态、计时和所有业务动作。
+- 记录组件、子进程和业务链路日志。
+
+### 3.2 Python 职责
+
+- 加载 AiBan Python SDK。
+- 按正确顺序注册回调、校验配置并启动 Pipeline。
+- 在 SDK 回调有效期内复制 metadata，转换为纯 Python 数据。
+- 输出标准推理事件、SDK 状态事件和截图结果。
+- 接收启动、停止、健康检查、截图、暂停和恢复等控制命令。
+- 在收到停止命令、stdin 关闭或进程信号时调用 `stopPipline()`。
+- 不执行标签判断、顺序判断、报警、写业务库等通用业务逻辑。
+
+### 3.3 进程通信方式
+
+阶段一使用本机进程管道：
+
+- `stdin`：Node-RED → Python 控制命令。
+- `stdout`：Python → Node-RED 结构化 JSON Lines 事件。
+- `stderr`：Python 运行日志和诊断信息。
+
+协议要求“一行一个完整 JSON 对象”。Python 的 `stdout` 禁止输出普通文本；所有普通日志
+必须写入 `stderr`，防止协议流被污染。
+
+阶段一不引入 HTTP、WebSocket、ZeroMQ 或数据库中转。若现场压测证明标准管道无法满足
+吞吐，再以测试数据为依据评审 IPC 升级，不能预先恢复旧 ZMQ 架构。
+
+---
+
+## 4. 组件设计
+
+### 4.1 `aiban-runtime` 组件
+
+建议配置项：
+
+| 配置项 | 说明 |
+|---|---|
+| `name` | 节点名称 |
+| `pythonPath` | 指定 Python 解释器，禁止只依赖系统 PATH |
+| `runnerPath` | Python AiBan 适配入口 |
+| `sdkHome` | AiBan SDK 目录 |
+| `pipelineConfig` | Pipeline YAML 路径 |
+| `workingDirectory` | Python 子进程工作目录 |
+| `startupTimeoutMs` | 启动超时 |
+| `shutdownTimeoutMs` | 优雅停止超时 |
+| `heartbeatIntervalMs` | 心跳周期 |
+| `heartbeatTimeoutMs` | 心跳判定超时 |
+| `restartPolicy` | `never`、`on-failure`、`always` |
+| `maxRestartCount` | 连续重启上限 |
+| `restartBackoffMs` | 重启退避时间 |
+| `autoStart` | Deploy 后是否自动启动 |
+
+组件输出建议分为三个端口：
+
+1. 推理帧：供标签和业务组件使用。
+2. SDK/运行状态事件：供监控和告警使用。
+3. 错误与诊断事件：供 Debug、审计或故障流程使用。
+
+组件输入支持：
+
+```json
+{"topic":"aiban/control","payload":{"command":"start"}}
+{"topic":"aiban/control","payload":{"command":"stop"}}
+{"topic":"aiban/control","payload":{"command":"restart"}}
+{"topic":"aiban/control","payload":{"command":"health"}}
+{"topic":"aiban/control","payload":{"command":"pause_source","group_id":1,"source_id":1}}
+{"topic":"aiban/control","payload":{"command":"resume_source","group_id":1,"source_id":1}}
+{"topic":"aiban/control","payload":{"command":"screenshot","group_id":1,"source_id":1,"request_id":"..."}}
+```
+
+### 4.2 Python Runner
+
+新增独立入口，建议目录：
+
+```text
+python_runtime/
+├── __init__.py
+├── aiban_runner.py
+├── sdk_adapter.py
+├── protocol.py
+├── command_loop.py
+└── lifecycle.py
+```
+
+Runner 必须可以独立接受模拟 SDK 测试，不依赖 `main.py`、Flask、旧 WorkflowEngine、
+旧报警进程或 ZMQ FrameBridge。
+
+### 4.3 实例与资源约束
+
+- 同一个 Node-RED 实例中，相同 Pipeline 配置默认只允许一个运行实例。
+- Node-RED 节点关闭时必须注销监听器、关闭 stdin 并回收子进程。
+- Deploy 时如果配置未变化，应避免无意义地重复启动 SDK。
+- 配置变化时采用“停止旧进程 → 确认退出 → 启动新进程”。
+- 不允许多个 Node-RED 节点同时争用同一 AiBan SDK 单例或相同摄像头资源。
+- Windows 下必须验证正常退出和强制结束整个子进程树，禁止遗留孤儿进程。
+
+---
+
+## 5. 消息协议
+
+### 5.1 通用事件结构
 
 ```json
 {
-  "workflow_id": "abc-sequence-demo",
-  "group_id": 1,
-  "source_id": 1,
-  "steps": [
-    {"id": "A", "model_id": 1, "label": "A", "confidence": 0.5},
-    {"id": "B", "model_id": 1, "label": "B", "confidence": 0.5},
-    {"id": "C", "model_id": 1, "label": "C", "confidence": 0.5}
-  ],
-  "cycle_timeout_ms": 30000
+  "schema_version": 1,
+  "type": "frame",
+  "runtime_id": "node-red-node-id",
+  "session_id": "uuid",
+  "event_id": "uuid",
+  "event_seq": 10241,
+  "emitted_at": "2026-07-02T10:00:00.123+08:00",
+  "payload": {}
 }
 ```
 
-判定要求：
-
-- 空闲状态识别到 A：创建一个新的 `cycle_id`，状态变为 `WAIT_B`。
-- `WAIT_B` 识别到 B：记录 B 完成，状态变为 `WAIT_C`。
-- `WAIT_C` 识别到 C：流程结果为 `OK`，完成本周期并落库。
-- B 在 A 之前、C 在 A/B 完成之前、步骤跳过或顺序错误：结果为 `NG`，必须记录 `failure_reason` 和实际识别步骤。
-- 周期开始后超过 `cycle_timeout_ms` 仍未完成：结果为 `TIMEOUT`，必须落库，不能只写日志。
-- 同一帧重复投递不得重复推进步骤；同一标签连续多帧出现只允许产生一次步骤边沿事件。
-- 一个周期完成后，新的 A 才能启动下一周期；是否允许“完成帧中的 A 同时开启下一周期”必须显式配置，默认不允许。
-- 不匹配 A/B/C 的其他标签不改变状态，但应按可配置级别记录调试日志。
-- 判断使用帧事件时间和 `frame_seq`，不能使用数据库写入完成时间作为业务顺序依据。
-
-状态至少按以下键隔离：
-
-```text
-workflow_id + session_id + group_id + source_id
-```
-
-不同摄像头、不同 SDK session、不同流程之间不得串状态。
-
-#### 8.2.4 标准消息契约
-
-进入顺序节点的消息必须保留：
-
-```text
-message_id
-session_id
-stream_id
-frame_seq
-group_id
-source_id
-sdk_received_at_ms
-node_received_at_ms
-models / labels
-```
-
-标签匹配节点新增但不得覆盖原始字段：
+### 5.2 推理帧事件
 
 ```json
 {
-  "workflow": {
-    "workflow_id": "abc-sequence-demo",
-    "matched_steps": ["A"],
-    "match_started_at_ms": 0,
-    "match_finished_at_ms": 0,
-    "match_duration_ms": 0.0
+  "schema_version": 1,
+  "type": "frame",
+  "session_id": "uuid",
+  "event_id": "uuid",
+  "event_seq": 10241,
+  "payload": {
+    "group_id": 1,
+    "source_id": 1,
+    "stream_id": "group-1/source-1",
+    "captured_at": "2026-07-02T10:00:00.100+08:00",
+    "models": {
+      "1": {
+        "ok": true,
+        "boxes": [
+          {
+            "label": "A",
+            "label_index": 0,
+            "confidence": 0.95,
+            "polygon": [],
+            "mask_contours": [],
+            "tracker_id": 27,
+            "sub_models": {}
+          }
+        ]
+      }
+    }
   }
 }
 ```
 
-顺序节点输出必须包含：
+Node-RED 输出给下游的消息：
 
-```text
-cycle_id
-previous_state
-current_state
-recognized_step
-expected_step
-result_status
-failure_reason
-cycle_started_at
-cycle_finished_at
-cycle_duration_ms
-event_id
+```json
+{
+  "topic": "aiban/frame",
+  "payload": {},
+  "aiban": {
+    "runtime_id": "node-id",
+    "session_id": "uuid",
+    "event_id": "uuid",
+    "event_seq": 10241,
+    "stream_id": "group-1/source-1"
+  }
+}
 ```
 
-#### 8.2.5 结果落库
+### 5.3 生命周期事件
 
-阶段 2 使用专用最小结果写入能力，不等待阶段 4 的通用副作用节点。建议表名：
+必须支持：
 
-```text
-icamera_data.workflow_abc_result
+- `runtime_starting`
+- `runtime_ready`
+- `sdk_event`
+- `heartbeat`
+- `screenshot_result`
+- `runtime_stopping`
+- `runtime_stopped`
+- `runtime_error`
+
+`runtime_ready` 只能在 SDK 配置校验和 Pipeline 启动成功后发送，不能以 Python 进程创建成功
+代替 AiBan 已就绪。
+
+### 5.4 控制响应
+
+每个控制命令包含 `request_id`，Python 返回：
+
+```json
+{
+  "schema_version": 1,
+  "type": "command_result",
+  "request_id": "uuid",
+  "ok": true,
+  "command": "screenshot",
+  "payload": {}
+}
 ```
 
-至少保存以下字段：
+Node-RED 必须配置命令超时；迟到响应只能记录，不能错误完成另一个请求。
 
-| 字段 | 说明 |
-|---|---|
-| `event_id` | 业务幂等键，唯一索引 |
-| `cycle_id` | 本次 A-B-C 周期 ID |
-| `workflow_id` | 流程 ID |
-| `session_id` | SDK 会话 ID |
-| `stream_id` | group/source 流标识 |
-| `group_id` / `source_id` | 视频源 |
-| `start_frame_seq` / `end_frame_seq` | 周期首尾帧 |
-| `actual_sequence` | 实际步骤序列，JSON 或字符串 |
-| `result_status` | `OK`、`NG` 或 `TIMEOUT` |
-| `failure_reason` | 失败或超时原因 |
-| `started_at` / `finished_at` | 北京时间，带毫秒 |
-| `cycle_duration_ms` | 业务周期耗时 |
-| `db_write_duration_ms` | 实际写库耗时 |
-| `created_at` | 数据库记录创建时间 |
+---
 
-数据库要求：
+## 6. AiBan SDK 约束
 
-- 提供建表 SQL 或自动迁移脚本。
-- `event_id` 建立唯一索引，重复消息使用 upsert/no-op，不得重复插入。
-- 数据库配置来自环境变量或独立配置文件，不得把密码写入流程 JSON、日志或 Git。
-- 写库必须有超时、有限重试和明确错误输出。
-- 写库失败时不得把结果伪装成成功；至少写入本地失败队列，支持后续重试。
-- 数据库操作不得阻塞帧接收循环；应使用异步队列、worker 或等价机制。
+1. 所有回调必须在 `buildPipline()` 前注册。
+2. `metadata` 只在推理回调期间有效，不得传出回调或保存原对象。
+3. 回调内只完成必要字段复制和轻量入队，禁止直接阻塞写 stdout。
+4. Python 内部使用有界事件队列和独立输出线程写 stdout。
+5. 队列达到高水位时必须发出明确过载事件，并暂停对应视频源；禁止静默丢帧。
+6. `checkAllConfig()` 必须校验返回值。
+7. 退出时必须调用 `stopPipline()`。
+8. YAML 修改后执行“停止 → 校验 → 重新启动”，不得伪装热更新。
+9. 截图为异步操作，必须使用 `request_id` 关联请求和结果。
 
-建议 `event_id`：
+本地进程管道移除了网络层，但没有移除生产者/消费者速度差异。阶段一仍必须实现有界队列、
+水位监控和 source 暂停/恢复，且必须通过压力测试确定容量。
 
-```text
-workflow_id:session_id:stream_id:cycle_id:result_status
-```
+---
 
-#### 8.2.6 工作流审计日志与实际耗时
+## 7. 分阶段开发计划
 
-日志风格参考：
+## 阶段 0：冻结旧架构并重置基线
 
-```text
-D:\workfolw_aiban_2.0\logs\frame_bridge
-```
+任务：
 
-新增目录：
+1. 保存当前分支和现有测试结果，建立可回退标签。
+2. 将 ZMQ FrameBridge、Outbox/Inbox 和 `aiban-frame-input` 标为旧架构。
+3. 建立旧代码处置清单：保留、复用、废弃、待删除。
+4. 冻结 1.0 功能清单，建立 `docs/WORKFLOW_1_0_PARITY_MATRIX.md`。
+5. 确认现场 Python、AiBan SDK、Node.js、Node-RED 和 Windows 版本。
 
-```text
-D:\workfolw_aiban_2.0\logs\workflow
-```
+完成条件：
 
-每次运行至少生成：
+- 新旧架构边界明确。
+- 当前代码可回退。
+- 后续开发不再向 ZMQ 主链路增加功能。
 
-```text
-workflow-<run_id>.log
-workflow-<run_id>.jsonl
-workflow-<run_id>-summary.csv
-```
+## 阶段 1：Node-RED 直接启动 Python/AiBan
 
-日志必须异步写入，不能阻塞 Node-RED 帧输入。所有事件使用北京时间并保留毫秒，使用 `message_id + event_id + cycle_id` 串联。
+### 1.1 协议与 Runner
 
-每个周期至少记录以下事件：
+- 定义 JSON Lines 协议及版本兼容规则。
+- 实现独立 Python Runner。
+- 实现 SDK 初始化、回调标准化、命令循环和优雅退出。
+- 提供 Mock SDK，允许无现场硬件运行全部基础测试。
+- 保证 stdout 只有协议，stderr 只有日志。
 
-```text
-frame_received
-label_match_started
-label_match_finished
-sequence_transition
-sequence_completed / sequence_failed / sequence_timeout
-db_write_queued
-db_write_started
-db_write_succeeded / db_write_failed
-```
+### 1.2 Node-RED 组件
 
-每条日志至少包含：
+- 实现 `aiban-runtime.js/.html`。
+- 使用参数数组调用 `spawn`，不拼接 shell 命令。
+- 完成配置校验、启动超时、健康检查、状态显示和日志采集。
+- 完成启动、停止、重启、截图、暂停和恢复命令。
+- 将 frame 事件通过 `node.send()` 直接交给下游。
+- 完成 Deploy、节点删除、Node-RED 退出时的子进程回收。
 
-```text
-audit_at
-event
-workflow_id
-message_id
-event_id
-cycle_id
-session_id
-stream_id
-frame_seq
-group_id
-source_id
-recognized_labels
-recognized_step
-previous_state
-current_state
-stage_duration_ms
-elapsed_from_frame_ms
-result_status
-error_code
-error_message
-```
+### 1.3 阶段一测试
 
-可读日志应像 `logs/frame_bridge/transmission-*.log` 一样直接显示处理链，例如：
+必须覆盖：
+
+1. Mock SDK 正常启动并连续输出帧。
+2. 下游 Debug/测试节点直接收到标准 `msg`。
+3. Python 路径、SDK 路径、YAML 路径错误。
+4. `checkAllConfig()` 失败、模型加载失败、授权失败。
+5. 启动超时和启动过程中停止。
+6. Python 异常退出及有限自动重启。
+7. Node-RED Deploy、重启和删除节点。
+8. 重复启动和同一 Pipeline 资源冲突。
+9. stdout 半包、粘连、空行、非法 JSON 和超大消息。
+10. stderr 大量日志不阻塞进程。
+11. 下游处理慢造成的背压。
+12. 队列高水位触发 source 暂停，回落后恢复。
+13. 截图请求、响应、超时和重复 request_id。
+14. Windows 孤儿进程检查。
+15. 真实 AiBan SDK 单路端到端运行。
+16. 现场最大路数和持续 24 小时稳定性测试。
+
+阶段一完成条件：
+
+- Deploy 后无需手工运行 Python。
+- `aiban-runtime → Debug` 可持续获得真实推理帧。
+- Node-RED 停止后无遗留 Python/AiBan 进程。
+- 异常状态在节点和日志中可见。
+- 正常负载无静默丢帧、无协议解析错误。
+- 自动化测试、现场测试和正式报告全部完成。
+
+## 阶段 2：A-B-C 组件拓扑最小闭环
+
+流程：
 
 ```text
-[ABC] #128 g1/s1 cycle=... │ 标签匹配 0.42ms → 顺序判断 0.08ms
-      → 写库排队 0.15ms → MySQL 3.60ms │ 累计 4.25ms │ A→B→C OK
+aiban-runtime
+→ 标签 A
+→ 标签 B
+→ 标签 C
+→ result
+→ result-db
 ```
 
-CSV 每个周期一行，至少汇总：
+原则：
 
-- A、B、C 各自首次识别时间和帧号。
-- 标签匹配耗时。
-- 顺序判断耗时。
-- 写库排队耗时。
-- MySQL 写入耗时。
-- 从触发结果到落库完成的累计处理耗时。
-- A 到 C 的业务周期耗时。
-- 最终状态、失败原因、重试次数。
+- 每个标签是独立组件，只配置自己的匹配条件。
+- A、B、C 顺序由 Node-RED 连线表达。
+- 改变连线即可改变执行顺序，不维护第二份 `steps` 数组。
+- 实现 OK、NG、TIMEOUT、乱序、跳步、幂等和状态隔离。
+- 复用当前阶段二代码前必须重新核对其输入契约，移除对旧
+  `aiban-frame-input`、Inbox 和 ZMQ 字段的强依赖。
 
-注意区分：
+完成条件：
 
-- `cycle_duration_ms`：A 到 C/失败/超时的业务时间。
-- `stage_duration_ms`：某个代码阶段实际执行时间。
-- `elapsed_from_frame_ms`：当前阶段完成时相对原始帧进入 SDK/Node-RED 的累计延迟。
+- Mock SDK 和真实 SDK 均完成闭环。
+- 仅改变画布连线即可改变识别顺序。
+- 最终结果可幂等写入 MySQL。
+- 有组件级日志和端到端处理耗时。
 
-#### 8.2.7 状态持久化和 Deploy 策略
+## 阶段 3：迁移全部业务逻辑组件
 
-- 至少明确 Node-RED 重启和 Deploy 时当前半成品周期如何处理。
-- 阶段 2 默认采用“恢复未完成周期”；若暂不能恢复，必须在启动后把中断周期落为 `NG/INTERRUPTED`，不得静默丢失。
-- 最近处理的 `message_id/frame_seq` 必须持久化或能从 inbox 重放恢复，避免重启后重复推进。
-- 必须提供手动 reset；reset 需记录原因、操作者/来源和被终止的 `cycle_id`。
+依据 `WORKFLOW_DOC.md` 和功能对等矩阵，逐项实现：
 
-#### 8.2.8 自动化测试
+- camera/group/source 过滤。
+- 主模型和二阶模型标签匹配。
+- counter、duration、N 帧累计。
+- timer、state、condition、reset。
+- sequence、monitor、cycle-record。
+- 1.0 custom_flow/state_machine。
+- 受控 Python handler 兼容机制及退出计划。
 
-至少覆盖：
+迁移期间采用同一输入数据双跑，对比 1.0 与 2.0 的状态、步骤、超时和最终结果。
 
-1. A → B → C，结果 `OK` 且只写库一次。
-2. B → A → C，结果 `NG`，原因可定位。
-3. A → C，识别为跳步 `NG`。
-4. A → B 后超时，结果 `TIMEOUT` 并落库。
-5. A、B、C 分别连续出现多帧，不重复推进。
-6. 同一个 `message_id` 重放，不重复推进、不重复写库。
-7. 两个 source 并行执行，状态互不干扰。
-8. 两个 session 使用相同 frame_seq，状态互不干扰。
-9. MySQL 首次写入失败后有限重试成功。
-10. MySQL 持续不可用，进入失败队列并输出错误日志。
-11. Node-RED 重启/Deploy 后未完成周期按约定恢复或落为 `INTERRUPTED`。
-12. 日志、JSONL、CSV 字段完整，阶段耗时均为非负数。
+## 阶段 4：迁移副作用组件
 
-测试应优先使用模拟标准帧，不依赖真实摄像头；另保留一项真实 AiBan SDK 的现场验收。
-
-#### 8.2.9 完成条件
-
-阶段 2 只有同时满足以下条件才算完成：
-
-- Node-RED 直接执行 A-B-C 顺序逻辑，不经过 Python WorkflowEngine。
-- OK、乱序 NG、跳步 NG、TIMEOUT 都能稳定产生最终结果。
-- 每个最终结果成功写入 MySQL，重放不会重复写库。
-- 日志能从原始 `message_id` 追踪到数据库 `event_id`。
-- 可读日志、JSONL、CSV 都能显示各阶段实际耗时。
-- 自动化测试全部通过并提供一条复现命令。
-- 提供可导入的示例 flow、建表 SQL、配置示例和阶段 2 测试报告。
-- 真实 SDK 环境至少完成一次 A → B → C → MySQL → 日志的现场演示。
-
-### 阶段 3：业务模式迁移
-
-迁移顺序：
-
-1. monitor
-2. timer_record
-3. 扩展 sequence（多步骤、计数、持续时间、可选步骤、循环）
-4. custom_flow/state_machine
-5. cycle-record
-6. Python handler 兼容
-
-迁移期间采用双跑：
-
-```text
-同一份标准化帧
-├── Python 1.0 引擎：影子运行，只记录结果
-└── Node-RED 2.0：候选运行
-```
-
-对比：
-
-- 状态变化。
-- 步骤完成。
-- 超时。
-- 报警类型和内容。
-- 计时结果。
-- 数据库字段。
-- 截图请求。
-
-### 阶段 4：副作用节点
-
-迁移：
+实现并验证：
 
 - alarm
-- 通用 save-db（阶段 2 的 A-B-C 专用结果写入在本阶段继续抽象）
+- save-db
 - speaker
-- socket server/client
+- socket client/server
 - api-trigger
 - api-output
 - screenshot
 - manual speaker test
 
-所有副作用节点必须支持：
+所有副作用必须支持幂等键、超时、有限重试、失败队列、审计和人工补偿。
 
-- 幂等键。
-- 超时配置。
-- 有限重试。
-- 失败队列。
-- 人工补偿。
-- 审计日志。
+## 阶段 5：运行管理
 
-历史帧重放不得造成重复写库、重复报警、重复播报或重复 API 推送。
+- Node-RED、Python、AiBan 的统一健康状态。
+- 流程版本、备份、回滚和 Deploy 策略。
+- 统一日志、错误码、指标和运行页面。
+- 配置文件化和凭据管理。
+- 安装包、启动方式和现场运维脚本。
 
-### 阶段 5：运行管理
+## 阶段 6：切换与发布
 
-实现：
+发布前必须：
 
-- Node-RED 启动和停止管理。
-- Python/Node-RED 健康检查。
-- Node-RED 离线缓存。
-- 流程版本号。
-- 流程备份和回滚。
-- 运行状态页面。
-- 统一日志格式。
-- 统一错误码。
-- 配置文件化，取消生产路径硬编码。
-
-### 阶段 6：切换和发布
-
-步骤：
-
-1. 按业务逐条切换至 Node-RED。
-2. 保留 Python 1.0 回退开关。
-3. 完成现场稳定性观察。
-4. 默认关闭 Python WorkflowEngine。
-5. 删除“Node-RED 导出 JSON 后由 Python 执行”的主路径。
-6. 完成开发、部署、运维和节点使用文档。
-7. 合并开发分支。
-8. 发布 `v2.0.0`。
+1. 功能对等矩阵全部通过。
+2. 现网真实流程完成 1.0/2.0 双跑。
+3. 完成稳定性、压力、故障恢复和回退演练。
+4. 默认入口切换为 Node-RED。
+5. 停用独立 `main.py → ZMQ → Node-RED` 主链路。
+6. 评审后删除或归档旧 ZMQ、Outbox、Inbox 代码。
+7. 发布 `v2.0.0`。
 
 ---
 
-## 9. 数据与状态设计原则
+## 8. 可靠性与性能指标
 
-### 9.1 状态隔离键
+阶段一初始目标：
 
-Node-RED 节点状态至少按以下维度隔离：
-
-```text
-flow_id
-+ workflow_id
-+ session_id
-+ group_id
-+ source_id
-```
-
-不能只使用 `source_id`，因为不同 group 中可能出现相同 source ID。
-
-### 9.2 事件时间
-
-- 业务持续时间优先使用帧时间或单调时钟。
-- 不能只使用 Node-RED 收到消息的时间，否则积压重放会改变业务结果。
-- 重放历史帧时，duration/timeout 必须保持与原始帧时间一致。
-
-### 9.3 幂等
-
-以下操作必须有业务幂等键：
-
-- 报警。
-- 数据库写入。
-- API 输出。
-- 喇叭命令。
-- 周期主表和步骤子表。
-- 截图请求。
-
-建议键格式：
-
-```text
-workflow_id:session_id:stream_id:event_type:event_seq
-```
-
-### 9.4 流程 Deploy
-
-必须明确三种 Deploy 策略：
-
-- 保留现有状态。
-- 清空并重启状态。
-- 从持久化检查点恢复。
-
-不得让普通 Deploy 在无提示的情况下造成计时器、步骤状态或周期记录丢失。
-
----
-
-## 10. 日志和监控
-
-至少采集：
-
-| 指标 | 维度 |
+| 指标 | 目标 |
 |---|---|
-| SDK 接收帧数 | group/source |
-| 最近帧序号 | session/stream |
-| 帧序号缺口 | session/stream |
-| SDK 回调耗时 | group/source |
-| Outbox 数量和容量 | stream |
-| Inbox 数量和容量 | stream |
-| ACK 延迟 | stream |
-| 端到端延迟 | stream |
-| 重传次数 | stream |
-| 重复消息数 | stream |
-| checksum 失败数 | stream |
-| source 暂停/恢复次数 | group/source |
-| Node-RED 在线状态 | instance |
-| 磁盘使用率 | path |
-| 工作流异常数 | flow/node |
-| 标签匹配耗时 | workflow/stream |
-| 顺序状态转换耗时 | workflow/stream/state |
-| 业务周期耗时 | workflow/stream/result |
-| 写库排队和执行耗时 | workflow/table/result |
-| 写库失败和重试次数 | workflow/table/error |
+| SDK 回调 P99 | `< 5 ms` |
+| Python 事件生成到 Node-RED 收到 P95 | `< 50 ms` |
+| Python 事件生成到 Node-RED 收到 P99 | `< 150 ms` |
+| 正常负载协议解析错误 | `0` |
+| 正常退出遗留子进程 | `0` |
+| 非预期无限重启 | `0` |
+| 正常运行静默丢帧 | `0` |
 
-日志必须能够使用 `message_id` 串联：
+这些指标必须在目标设备、实际摄像头数量和模型输出量下重新校准。
 
-```text
-SDK callback
-→ Python outbox
-→ ZeroMQ transport
-→ Node-RED inbox
-→ Node-RED workflow
-→ alarm/save-db/api-output
-```
+管道不是持久化消息队列。Python 或 Node-RED 异常退出时，尚未被 Node-RED 读取的内存事件
+可能丢失。阶段一的可靠性策略是：
 
-阶段 2 起，工作流日志还必须能继续串联：
+- 缩短进程内停留时间。
+- 使用序号检测缺口。
+- 明确上报异常。
+- 过载时暂停视频源。
+- 通过监督和快速恢复减少故障窗口。
 
-```text
-frame_received
-→ label_match
-→ A/B/C sequence transition
-→ final result
-→ db queue
-→ MySQL result row
-```
-
-FrameBridge 传输日志与 workflow 业务日志职责分离，但必须通过同一个
-`message_id` 关联。业务周期级事件再使用 `cycle_id` 和 `event_id` 关联，
-不得只输出无法检索的自然语言日志。
+如果业务确认要求“进程崩溃后逐帧恢复”，应单独增加本机可选持久化缓冲层，但持久化层
+必须位于 Node-RED 管理的 Python Runner 内部，不得重新引入 Python 主动连接 Node-RED
+的 ZMQ 网络架构。
 
 ---
 
-## 11. 安全与配置
+## 9. 日志、监控与审计
 
-- 数据库密码、API secret、Node-RED credentialSecret 不得提交到 Git。
-- Git 中只保留 `.example` 配置。
-- 生产配置通过环境变量或独立配置文件加载。
-- ZeroMQ 如果跨主机部署，必须评估 CurveZMQ 或受控内网认证。
+至少记录：
+
+- Node-RED 节点 ID、runtime_id、session_id、Python PID。
+- SDK 启动、就绪、停止和错误状态。
+- 每路 source 最近 event_seq 和序号缺口。
+- SDK 回调耗时、Python 排队时间、管道传输时间。
+- 内部队列深度、高低水位、暂停和恢复次数。
+- 子进程退出码、退出原因、重启次数和退避时间。
+- 控制命令 request_id、耗时和结果。
+- 下游工作流 event_id、cycle_id 和最终结果。
+
+日志必须能够按以下标识串联：
+
+```text
+runtime_id → session_id → event_id → stream_id/event_seq → cycle_id
+```
+
+---
+
+## 10. 安全与配置
+
+- Node-RED 使用 `spawn(executable, args)`，禁止 `shell: true`。
+- Python、Runner、SDK 和 YAML 路径必须规范化并校验。
+- 不允许普通消息任意覆盖 executable 或 runnerPath。
+- 生产配置不得包含 Git 中的数据库密码和 API secret。
 - Node-RED 管理端必须启用身份验证。
-- 外部 API 输入必须支持签名或 token。
-- 日志中不得打印密码、appsecret、完整认证头。
+- stderr 和 Node-RED 日志不得输出密码、令牌或完整认证头。
+- 子进程使用最小必要权限运行。
 
 ---
 
-## 12. Git 与更新记录规范
+## 11. 代码与文档交付物
 
-### 12.1 分支
-
-建议：
+阶段一至少交付：
 
 ```text
-main
-└── v2.0-node-red-runtime
+python_runtime/
+├── aiban_runner.py
+├── sdk_adapter.py
+├── protocol.py
+├── command_loop.py
+└── lifecycle.py
+
+node-red-contrib-aiban-workflow/
+├── aiban-runtime.js
+├── aiban-runtime.html
+└── test/aiban-runtime.test.js
+
+docs/
+├── AIBAN_RUNTIME_PROTOCOL.md
+├── AIBAN_RUNTIME_OPERATIONS.md
+├── LEGACY_ZMQ_MIGRATION.md
+└── TEST_REPORT_PHASE_1_RUNTIME.md
 ```
 
-高风险功能可创建短期功能分支：
+同时更新：
 
-```text
-feature/frame-bridge
-feature/node-red-frame-input
-feature/sequence-runtime
-```
-
-### 12.2 Commit 规范
-
-示例：
-
-```text
-feat(bridge): add normalized frame protocol
-feat(bridge): persist frames in sqlite outbox
-feat(node-red): add durable frame input node
-fix(bridge): replay unacked frames after reconnect
-test(bridge): cover ack loss and duplicate delivery
-docs(v2): document transport and recovery
-```
-
-### 12.3 每次更新必须记录
-
-```text
-日期：
-分支：
-Commit ID：
-修改文件：
-实现内容：
-验证命令：
-测试结果：
-已知问题：
-下一步：
-```
-
-### 12.4 推送要求
-
-每完成一个可验证任务：
-
-1. 检查 `git diff`。
-2. 运行测试。
-3. 创建单一职责 commit。
-4. 推送当前开发分支。
-5. 向用户报告 commit ID 和更新内容。
-
-不得将无关修改混入同一提交。不得覆盖用户已有未提交修改。
+- `package.json`
+- `README.md`
+- Node-RED 示例 flow
+- 安装依赖和环境变量示例
+- 功能对等矩阵
 
 ---
 
-## 13. AI 每次接手任务的执行模板
+## 12. Git 与实施规则
 
-### 13.1 开始前
+1. 开发前检查当前分支、未提交修改和最近提交。
+2. 不覆盖用户已有修改，不将无关文件混入提交。
+3. 每次只完成一个可验证任务。
+4. 协议、生命周期和异常分支必须先有测试。
+5. 每完成一个任务，记录修改文件、验证命令、测试结果和已知风险。
+6. 新阶段一验收前，不删除旧架构代码。
+7. 未完成全量功能对等前，保留 1.0 回退能力。
 
-```text
-1. 阅读 WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md
-2. 阅读与当前任务相关的源码和文档
-3. git status --short --branch
-4. git log -5 --oneline
-5. 确认当前阶段和未完成项
-6. 检查是否存在用户未提交修改
-```
-
-### 13.2 开发时
+建议提交顺序：
 
 ```text
-1. 只修改当前任务所需文件
-2. 保持 1.0 回退路径
-3. 为协议和状态变化增加测试
-4. 不在 SDK 回调中加入阻塞操作
-5. 不使用静默丢帧策略
-6. 所有副作用操作考虑幂等
-```
-
-### 13.3 完成后
-
-```text
-1. 运行单元测试
-2. 运行相关集成测试
-3. 检查日志和错误分支
-4. 更新文档/变更记录
-5. 提交并推送
-6. 报告修改、测试、commit ID 和剩余风险
+docs(runtime): reset phase 1 architecture
+feat(runtime): add python JSONL protocol and mock runner
+feat(node-red): add aiban runtime process node
+test(runtime): cover lifecycle and malformed protocol
+feat(runtime): integrate real AiBan SDK adapter
+test(runtime): verify real SDK end-to-end flow
+docs(runtime): add phase 1 test report and operations
 ```
 
 ---
 
-## 14. 当前下一步
+## 13. 当前立即执行顺序
 
-阶段 1 的可靠帧通道和前三项代码闭环已经完成。当前按以下顺序实施阶段 2：
-
-1. 冻结并测试阶段 2 标准消息契约。
-2. 提供 `workflow_abc_result` 建表 SQL 和数据库 `.example` 配置。
-3. 实现 `aiban-label-match`，输出 A/B/C 边沿事件和匹配耗时。
-4. 将 `aiban-sequence` 改为 Node-RED 运行时直接执行的 A-B-C 状态机。
-5. 实现专用、异步、幂等的 `aiban-result-db`。
-6. 实现 `aiban-workflow-audit` 可读日志、JSONL 和 CSV 汇总。
-7. 组合并提交最小示例 flow。
-8. 完成模拟帧自动化测试和故障注入测试。
-9. 生成 `docs/TEST_REPORT_PHASE_2.md`。
-10. 在真实 AiBan SDK 和 MySQL 环境完成一次端到端演示。
+1. 评审并冻结本计划。
+2. 建立旧 ZMQ 代码迁移清单。
+3. 定义 `AIBAN_RUNTIME_PROTOCOL.md`。
+4. 使用 Mock SDK 实现 Python Runner。
+5. 实现 `aiban-runtime` Node-RED 组件。
+6. 完成 `aiban-runtime → Debug` 模拟帧闭环。
+7. 接入真实 AiBan SDK。
+8. 完成生命周期、异常、背压和 Windows 进程回收测试。
+9. 输出新阶段一测试报告。
+10. 阶段一验收后，再调整并继续阶段二组件。
 
 ---
 
-## 15. 核心决策摘要
+## 14. 核心决策摘要
 
-后续 AI 不得在没有明确评审的情况下推翻以下决策：
-
-1. Node-RED 是 2.0 的业务工作流执行引擎。
-2. Python 不再执行通用业务工作流，只负责 SDK、标准化和可靠桥接。
-3. SDK metadata 不得跨回调生命周期传递。
-4. SDK 回调不得等待网络、数据库或 ACK。
-5. 不采用“HWM 满后丢弃旧帧”。
-6. 使用帧序号、持久化 outbox/inbox、ACK、重传和去重。
-7. 过载时优先暂停视频源，不静默丢帧。
-8. Node-RED 重放消息时，所有副作用必须幂等。
-9. 1.0 引擎在 2.0 完成现场验证前必须保留为回退路径。
-10. 每次代码更新必须测试、提交、推送并记录说明。
+1. Node-RED 是系统启动入口和业务工作流执行引擎。
+2. Node-RED 组件直接启动并管理 Python/AiBan 子进程。
+3. Python 与 Node-RED 阶段一使用本机 stdin/stdout JSON Lines 通信。
+4. 推理事件由 `aiban-runtime` 直接 `node.send()` 给下游组件。
+5. ZMQ、Outbox、Inbox 和 ACK 不再属于新主链路。
+6. Python 只负责 SDK 和协议适配，不执行通用业务工作流。
+7. SDK metadata 必须在回调有效期内转换为普通数据。
+8. 回调线程不得直接执行阻塞管道写入或业务动作。
+9. 过载时优先暂停视频源，不允许静默丢帧。
+10. Deploy、停止和异常退出必须正确回收 Python/AiBan 进程。
+11. A-B-C 只是阶段二最小闭环，不代表全部迁移完成。
+12. 1.0 全部现用功能完成对等迁移和现场验证后，才允许发布 2.0。

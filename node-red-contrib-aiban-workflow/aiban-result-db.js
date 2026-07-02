@@ -1,6 +1,5 @@
 "use strict";
 
-const path = require("node:path");
 const { MysqlWriteQueue } = require("./lib/mysql-write-queue");
 const { beijingNowISO } = require("./lib/workflow-audit");
 
@@ -8,7 +7,7 @@ const { beijingNowISO } = require("./lib/workflow-audit");
  * aiban-result-db — Async MySQL Result Writer
  *
  * Processes terminal events (OK, NG, TIMEOUT, INTERRUPTED) from the
- * aiban-abc-sequence node and writes them idempotently to MySQL.
+ * aiban-result node and writes them idempotently to MySQL.
  *
  * Features:
  * - Async write queue (non-blocking)
@@ -17,6 +16,9 @@ const { beijingNowISO } = require("./lib/workflow-audit");
  * - Failure fallback to local JSONL file
  * - Per-cycle write timing measurement
  * - Reports db_result status back on output
+ *
+ * Input: terminal events from aiban-result node
+ * Output: same message with db_result block appended
  */
 
 const TERMINAL_STATUSES = ["OK", "NG", "TIMEOUT", "INTERRUPTED"];
@@ -31,7 +33,7 @@ module.exports = function registerResultDbNode(RED) {
         const retryDelayMs = Math.max(100, Number(config.retryDelayMs) || 500);
         const queueSize = Math.max(10, Number(config.queueSize) || 1000);
 
-        // Create write queue
+        // Create write queue (env-var based config, no passwords in flow JSON)
         const writeQueue = new MysqlWriteQueue({
             host: process.env.MYSQL_HOST || "127.0.0.1",
             port: Number(process.env.MYSQL_PORT) || 3306,
@@ -55,9 +57,9 @@ module.exports = function registerResultDbNode(RED) {
             try {
                 const abcResult = msg.abc_result;
 
-                // Only process terminal events
+                // Only process terminal events (from aiban-result, these are always terminal)
                 if (!abcResult || !TERMINAL_STATUSES.includes(abcResult.result_status)) {
-                    // Transition events pass through unchanged
+                    // Pass through non-terminal events unchanged
                     send(msg);
                     if (done) done();
                     return;
@@ -65,18 +67,19 @@ module.exports = function registerResultDbNode(RED) {
 
                 const frame = msg.payload || {};
                 const workflowData = msg.workflow || {};
+                const now = beijingNowISO();
 
-                // Build the DB row
+                // Build the DB row from new message format
                 const row = {
                     event_id: abcResult.event_id,
                     cycle_id: abcResult.cycle_id,
                     workflow_id: workflowData.workflow_id || "",
-                    session_id: frame.session_id || msg.aiban?.session_id || "",
-                    stream_id: frame.stream_id || msg.aiban?.stream_id || "",
-                    group_id: Number(frame.group_id || 0),
-                    source_id: Number(frame.source_id || 0),
-                    start_frame_seq: null, // Filled by sequence node's state
-                    end_frame_seq: Number(frame.frame_seq || 0),
+                    session_id: abcResult.session_id || frame.session_id || msg.aiban?.session_id || "",
+                    stream_id: abcResult.stream_id || frame.stream_id || msg.aiban?.stream_id || "",
+                    group_id: Number(abcResult.group_id || frame.group_id || 0),
+                    source_id: Number(abcResult.source_id || frame.source_id || 0),
+                    start_frame_seq: abcResult.start_frame_seq ?? null,
+                    end_frame_seq: Number(abcResult.end_frame_seq || frame.frame_seq || 0),
                     actual_sequence: abcResult.actual_sequence || null,
                     result_status: abcResult.result_status,
                     failure_reason: abcResult.failure_reason || null,
@@ -84,13 +87,8 @@ module.exports = function registerResultDbNode(RED) {
                     finished_at: abcResult.cycle_finished_at || null,
                     cycle_duration_ms: abcResult.cycle_duration_ms ?? null,
                     db_write_duration_ms: null,
-                    created_at: beijingNowISO(),
+                    created_at: now,
                 };
-
-                // Try to extract start_frame_seq from audit data or state
-                if (msg._cycle_start_frame_seq !== undefined) {
-                    row.start_frame_seq = Number(msg._cycle_start_frame_seq);
-                }
 
                 // Enqueue for async write
                 writeQueue.enqueue(row);
@@ -105,7 +103,7 @@ module.exports = function registerResultDbNode(RED) {
                     table: tableName,
                 };
 
-                // Re-attach the audit logger from upstream
+                // Share audit logger reference with write queue for db_write events
                 if (msg._audit && !writeQueue._audit) {
                     writeQueue._audit = msg._audit;
                 }
