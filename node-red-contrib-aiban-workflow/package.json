@@ -5,7 +5,7 @@
   "main": "sequence-node.js",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:phase1": "node --test test/frame-core.test.js",
+    "test:phase1": "node --test test/aiban-runtime.test.js --test-concurrency=1",
     "test:phase2": "node --test test/phase2-closed-loop.test.js"
   },
   "engines": {
@@ -26,6 +26,7 @@
       "workflow-socket-client": "socket-client-node.js",
       "workflow-api-trigger": "api-trigger-node.js",
       "workflow-api-output": "api-output-node.js",
+      "aiban-runtime": "aiban-runtime.js",
       "aiban-frame-input": "frame-input-node.js",
       "aiban-label": "aiban-label.js",
       "aiban-result": "aiban-result.js",

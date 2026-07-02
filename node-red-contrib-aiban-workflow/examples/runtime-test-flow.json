@@ -1,0 +1,139 @@
+[
+    {
+        "id": "runtime-1",
+        "type": "aiban-runtime",
+        "name": "AiBan Runtime",
+        "pythonPath": "python",
+        "runnerPath": "",
+        "sdkHome": "",
+        "pipelineConfig": "",
+        "workingDirectory": "",
+        "startupTimeoutMs": 30000,
+        "shutdownTimeoutMs": 10000,
+        "heartbeatIntervalMs": 5000,
+        "heartbeatTimeoutMs": 15000,
+        "restartPolicy": "never",
+        "maxRestartCount": 3,
+        "restartBackoffMs": 5000,
+        "autoStart": true,
+        "wires": [
+            ["frame-debug-1"],
+            ["status-debug-1"],
+            ["error-debug-1"]
+        ]
+    },
+    {
+        "id": "frame-debug-1",
+        "type": "debug",
+        "name": "Frames",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "wires": []
+    },
+    {
+        "id": "status-debug-1",
+        "type": "debug",
+        "name": "Status",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "wires": []
+    },
+    {
+        "id": "error-debug-1",
+        "type": "debug",
+        "name": "Errors",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "wires": []
+    },
+    {
+        "id": "inject-control-1",
+        "type": "inject",
+        "name": "Trigger Start",
+        "props": [
+            {
+                "p": "topic",
+                "v": "aiban/control",
+                "vt": "str"
+            },
+            {
+                "p": "payload",
+                "v": "{\"command\":\"start\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "wires": [
+            ["runtime-1"]
+        ]
+    },
+    {
+        "id": "inject-control-2",
+        "type": "inject",
+        "name": "Trigger Stop",
+        "props": [
+            {
+                "p": "topic",
+                "v": "aiban/control",
+                "vt": "str"
+            },
+            {
+                "p": "payload",
+                "v": "{\"command\":\"stop\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "wires": [
+            ["runtime-1"]
+        ]
+    },
+    {
+        "id": "inject-control-3",
+        "type": "inject",
+        "name": "Screenshot G1/S1",
+        "props": [
+            {
+                "p": "topic",
+                "v": "aiban/control",
+                "vt": "str"
+            },
+            {
+                "p": "payload",
+                "v": "{\"command\":\"screenshot\",\"params\":{\"group_id\":1,\"source_id\":1}}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "wires": [
+            ["runtime-1"]
+        ]
+    }
+]

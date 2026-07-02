@@ -1,0 +1,189 @@
+<!--
+  aiban-runtime — Node-RED editor configuration panel.
+
+  This node manages a Python/AiBan child process, reading inference frames
+  from stdout and sending control commands via stdin (JSON Lines).
+-->
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-runtime", {
+        category: "AiBan",
+        color: "#2C3E50",
+        defaults: {
+            name: { value: "aiban-runtime" },
+            pythonPath: { value: "python" },
+            runnerPath: { value: "" },
+            sdkHome: { value: "" },
+            pipelineConfig: { value: "" },
+            workingDirectory: { value: "" },
+            startupTimeoutMs: { value: 30000, validate: RED.validators.number() },
+            shutdownTimeoutMs: { value: 10000, validate: RED.validators.number() },
+            heartbeatIntervalMs: { value: 5000, validate: RED.validators.number() },
+            heartbeatTimeoutMs: { value: 15000, validate: RED.validators.number() },
+            restartPolicy: { value: "never" },
+            maxRestartCount: { value: 3, validate: RED.validators.number() },
+            restartBackoffMs: { value: 5000, validate: RED.validators.number() },
+            autoStart: { value: true },
+        },
+        inputs: 1,
+        outputs: 3,
+        icon: "bridge.svg",
+        paletteLabel: "aiban-runtime",
+
+        label: function () {
+            return this.name || "aiban-runtime";
+        },
+
+        labelStyle: function () {
+            return this.name ? "node_label_italic" : "";
+        },
+
+        oneditprepare: function () {
+            // Initialize tabs
+            $("#aiban-runtime-tabs").tabs();
+
+            // Restart policy dependent fields
+            const policy = $("#node-input-restartPolicy");
+            const restartFields = $(".restart-dependent");
+
+            function updateRestartVisibility() {
+                if (policy.val() === "never") {
+                    restartFields.hide();
+                } else {
+                    restartFields.show();
+                }
+            }
+
+            policy.on("change", updateRestartVisibility);
+            updateRestartVisibility();
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-runtime">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
+        <input type="text" id="node-input-name" placeholder="aiban-runtime">
+    </div>
+
+    <div id="aiban-runtime-tabs" style="margin-top: 8px;">
+        <ul>
+            <li><a href="#tab-paths">路径配置</a></li>
+            <li><a href="#tab-timeouts">超时与心跳</a></li>
+            <li><a href="#tab-restart">重启策略</a></li>
+        </ul>
+
+        <!-- Paths tab -->
+        <div id="tab-paths">
+            <div class="form-row">
+                <label for="node-input-pythonPath"><i class="fa fa-terminal"></i> Python 路径</label>
+                <input type="text" id="node-input-pythonPath" placeholder="python">
+                <span class="form-tip">指定 Python 解释器，禁止只依赖系统 PATH</span>
+            </div>
+            <div class="form-row">
+                <label for="node-input-runnerPath"><i class="fa fa-file-code-o"></i> Runner 入口</label>
+                <input type="text" id="node-input-runnerPath" placeholder="默认: python_runtime/aiban_runner.py">
+                <span class="form-tip">Python AiBan 适配入口脚本路径</span>
+            </div>
+            <div class="form-row">
+                <label for="node-input-sdkHome"><i class="fa fa-folder"></i> SDK 目录</label>
+                <input type="text" id="node-input-sdkHome" placeholder="D:/product/AiBanWorkSpace">
+                <span class="form-tip">AiBan SDK 安装目录</span>
+            </div>
+            <div class="form-row">
+                <label for="node-input-pipelineConfig"><i class="fa fa-file-text-o"></i> Pipeline YAML</label>
+                <input type="text" id="node-input-pipelineConfig" placeholder="D:/product/AiBanWorkSpace/abvideo/main-flow.yaml">
+                <span class="form-tip">Pipeline 配置 YAML 文件路径</span>
+            </div>
+            <div class="form-row">
+                <label for="node-input-workingDirectory"><i class="fa fa-folder-open"></i> 工作目录</label>
+                <input type="text" id="node-input-workingDirectory" placeholder="Python 子进程工作目录（可选）">
+            </div>
+            <div class="form-row">
+                <label for="node-input-autoStart"><i class="fa fa-play"></i> 自动启动</label>
+                <input type="checkbox" id="node-input-autoStart" style="display:inline;width:auto;vertical-align:middle;">
+                <span>Deploy 后自动启动 Pipeline</span>
+            </div>
+        </div>
+
+        <!-- Timeouts tab -->
+        <div id="tab-timeouts">
+            <div class="form-row">
+                <label for="node-input-startupTimeoutMs">启动超时 (ms)</label>
+                <input type="number" id="node-input-startupTimeoutMs" min="1000" max="300000" step="1000">
+                <span class="form-tip">等待 runtime_ready 的最大时间（默认 30000）</span>
+            </div>
+            <div class="form-row">
+                <label for="node-input-shutdownTimeoutMs">停止超时 (ms)</label>
+                <input type="number" id="node-input-shutdownTimeoutMs" min="1000" max="60000" step="1000">
+                <span class="form-tip">优雅退出等待时间（默认 10000）</span>
+            </div>
+            <div class="form-row">
+                <label for="node-input-heartbeatIntervalMs">心跳周期 (ms)</label>
+                <input type="number" id="node-input-heartbeatIntervalMs" min="1000" max="60000" step="1000">
+                <span class="form-tip">Python 心跳发送周期（默认 5000）</span>
+            </div>
+            <div class="form-row">
+                <label for="node-input-heartbeatTimeoutMs">心跳超时 (ms)</label>
+                <input type="number" id="node-input-heartbeatTimeoutMs" min="2000" max="120000" step="1000">
+                <span class="form-tip">判定心跳丢失的超时时间（默认 15000）</span>
+            </div>
+        </div>
+
+        <!-- Restart tab -->
+        <div id="tab-restart">
+            <div class="form-row">
+                <label for="node-input-restartPolicy">重启策略</label>
+                <select id="node-input-restartPolicy">
+                    <option value="never">never — 不自动重启</option>
+                    <option value="on-failure">on-failure — 仅异常退出时重启</option>
+                    <option value="always">always — 总是重启</option>
+                </select>
+            </div>
+            <div class="form-row restart-dependent">
+                <label for="node-input-maxRestartCount">最大重启次数</label>
+                <input type="number" id="node-input-maxRestartCount" min="1" max="100" step="1">
+                <span class="form-tip">连续重启上限（默认 3）</span>
+            </div>
+            <div class="form-row restart-dependent">
+                <label for="node-input-restartBackoffMs">重启退避 (ms)</label>
+                <input type="number" id="node-input-restartBackoffMs" min="1000" max="120000" step="1000">
+                <span class="form-tip">初始退避时间，指数增长，最大 60s（默认 5000）</span>
+            </div>
+        </div>
+    </div>
+</script>
+
+<script type="text/html" data-help-name="aiban-runtime">
+    <h3>aiban-runtime — AiBan 运行管理节点</h3>
+
+    <p>管理 Python/AiBan 子进程的完整生命周期。通过 <code>child_process.spawn</code>
+    启动 Python，使用 stdin/stdout JSON Lines 协议通信。</p>
+
+    <h4>输入端口</h4>
+    <p>接收控制命令：</p>
+    <pre><code>msg.topic = "aiban/control"
+msg.payload = {
+    command: "start" | "stop" | "restart" | "health" | "screenshot",
+    params: { ... }
+}
+</code></pre>
+
+    <h4>输出端口</h4>
+    <ol>
+        <li><b>推理帧</b> <code>topic: aiban/frame</code> — 供标签和业务组件使用</li>
+        <li><b>状态事件</b> <code>topic: aiban/status</code> — 生命周期、心跳、SDK 事件</li>
+        <li><b>错误诊断</b> <code>topic: aiban/error</code> — 协议解析错误、异常通知</li>
+    </ol>
+
+    <h4>Python Runner</h4>
+    <p>需要 <code>python_runtime/</code> 目录。开发测试时可用 Mock SDK：</p>
+    <pre><code>python -m python_runtime.aiban_runner --mock --labels A,B,C</code></pre>
+
+    <h4>配置要点</h4>
+    <ul>
+        <li><b>Python 路径</b>：指定完整路径，禁止只依赖 PATH</li>
+        <li><b>Runner 入口</b>：指向 <code>aiban_runner.py</code></li>
+        <li><b>自动启动</b>：Deploy 后自动发送 start 命令</li>
+        <li><b>重启策略</b>：异常退出时自动重启（最多 N 次）</li>
+    </ul>
+</script>
