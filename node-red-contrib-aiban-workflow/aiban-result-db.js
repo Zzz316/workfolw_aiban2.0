@@ -152,7 +152,7 @@ module.exports = function registerResultDbNode(RED) {
         });
     }
 
-    RED.nodes.registerType("aiban-result-db", {
+    RED.nodes.registerType("aiban-result-db", AibanResultDbNode, {
         category: "艾班工作流",
         color: "#90EE90",
         defaults: {

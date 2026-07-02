@@ -871,7 +871,7 @@ module.exports = function registerAbcSequenceNode(RED) {
         });
     }
 
-    RED.nodes.registerType("aiban-abc-sequence", {
+    RED.nodes.registerType("aiban-abc-sequence", AibanAbcSequenceNode, {
         category: "艾班工作流",
         color: "#FFA07A",
         defaults: {

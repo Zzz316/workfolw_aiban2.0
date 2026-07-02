@@ -118,7 +118,7 @@ module.exports = function registerLabelMatchNode(RED) {
         });
     }
 
-    RED.nodes.registerType("aiban-label-match", {
+    RED.nodes.registerType("aiban-label-match", AibanLabelMatchNode, {
         category: "艾班工作流",
         color: "#87CEEB",
         defaults: {
