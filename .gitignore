@@ -17,11 +17,13 @@ node-red-contrib-aiban-workflow/node_modules/
 # Runtime state, logs, databases and generated files
 log/
 logs/
+data/
 *.log
 *.log.*
 *.db
 *.db-shm
 *.db-wal
+*.jsonl
 tmp/
 output/
 outputs/

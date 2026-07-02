@@ -1,0 +1,109 @@
+<script type="text/html" data-template-name="aiban-label-match">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 节点名称</label>
+        <input type="text" id="node-input-name" placeholder="标签匹配">
+    </div>
+    <div class="form-row">
+        <label for="node-input-workflow_id"><i class="fa fa-sitemap"></i> Workflow ID</label>
+        <input type="text" id="node-input-workflow_id" placeholder="abc-sequence-demo">
+    </div>
+    <hr>
+    <h4><i class="fa fa-list-ol"></i> 匹配步骤</h4>
+    <div class="form-row">
+        <label>&nbsp;</label>
+        <span style="font-size:0.85em;color:#888;">
+            每步按 model_id + label + confidence 与帧中的检测框匹配。任一帧匹配到任一步骤即输出。
+        </span>
+    </div>
+    <div class="form-row">
+        <ol id="node-input-steps-container" style="margin-left:20px;max-height:300px;overflow-y:auto;"></ol>
+    </div>
+    <hr>
+    <h4><i class="fa fa-bug"></i> 调试</h4>
+    <div class="form-row">
+        <label for="node-input-unmatchedLogLevel">未匹配日志级别</label>
+        <select id="node-input-unmatchedLogLevel" style="width:200px;">
+            <option value="none">关闭</option>
+            <option value="debug">调试(debug)</option>
+            <option value="info">信息(info)</option>
+            <option value="warn">警告(warn)</option>
+        </select>
+    </div>
+</script>
+
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-label-match", {
+        category: "艾班工作流",
+        color: "#87CEEB",
+        defaults: {
+            name: { value: "标签匹配" },
+            workflow_id: { value: "abc-sequence-demo" },
+            steps: { value: [] },
+            unmatchedLogLevel: { value: "none" },
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-filter",
+        paletteLabel: "aiban label match",
+        label: function () {
+            return this.name || "标签匹配";
+        },
+        oneditprepare: function () {
+            const node = this;
+
+            // Initialize editable list for steps
+            $("#node-input-steps-container").editableList({
+                addButton: true,
+                removable: true,
+                addItem: function (container, i, data) {
+                    const row = $(
+                        '<div class="form-row">'
+                        + '<label style="font-size:0.85em;">步骤 ' + (i + 1) + '</label>'
+                        + '</div>'
+                    );
+                    const fields = $(
+                        '<div style="margin-left:20px;display:flex;gap:8px;flex-wrap:wrap;">'
+                        + '<input type="text" class="step-id" placeholder="ID (如 A)" style="width:60px;">'
+                        + '<input type="text" class="step-model" placeholder="Model ID" style="width:70px;" value="1">'
+                        + '<input type="text" class="step-label" placeholder="Label" style="width:80px;">'
+                        + '<input type="number" class="step-conf" placeholder="最小置信度" style="width:100px;" step="0.01" min="0" max="1" value="0.5">'
+                        + '</div>'
+                    );
+                    container.append(row).append(fields);
+
+                    // Load existing data
+                    if (data) {
+                        container.find(".step-id").val(data.id || "");
+                        container.find(".step-model").val(data.model_id || "1");
+                        container.find(".step-label").val(data.label || "");
+                        container.find(".step-conf").val(data.confidence || 0.5);
+                    }
+                },
+            });
+
+            // Load saved steps
+            if (Array.isArray(node.steps) && node.steps.length > 0) {
+                for (const s of node.steps) {
+                    $("#node-input-steps-container").editableList("addItem", s);
+                }
+            }
+        },
+        oneditsave: function () {
+            const items = $("#node-input-steps-container").editableList("items");
+            const steps = [];
+            items.each(function () {
+                const $item = $(this);
+                steps.push({
+                    id: $item.find(".step-id").val() || "",
+                    model_id: $item.find(".step-model").val() || "1",
+                    label: $item.find(".step-label").val() || "",
+                    confidence: Number($item.find(".step-conf").val()) || 0.5,
+                });
+            });
+            // Filter out steps without id or label
+            this.steps = steps.filter(function (s) {
+                return s.id && s.label;
+            });
+        },
+    });
+</script>

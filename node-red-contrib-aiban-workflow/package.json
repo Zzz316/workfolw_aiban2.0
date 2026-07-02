@@ -1,10 +1,12 @@
 {
   "name": "node-red-contrib-aiban-workflow",
-  "version": "1.0.0",
-  "description": "Node-RED nodes for Aiban Workflow Engine",
+  "version": "1.1.0",
+  "description": "Node-RED nodes for Aiban Workflow Engine — Phase 2 Runtime Execution",
   "main": "sequence-node.js",
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:phase1": "node --test test/frame-core.test.js",
+    "test:phase2": "node --test test/phase2-closed-loop.test.js"
   },
   "engines": {
     "node": ">=22.5"
@@ -24,11 +26,15 @@
       "workflow-socket-client": "socket-client-node.js",
       "workflow-api-trigger": "api-trigger-node.js",
       "workflow-api-output": "api-output-node.js",
-      "aiban-frame-input": "frame-input-node.js"
+      "aiban-frame-input": "frame-input-node.js",
+      "aiban-label-match": "aiban-label-match.js",
+      "aiban-abc-sequence": "aiban-abc-sequence.js",
+      "aiban-result-db": "aiban-result-db.js"
     }
   },
   "dependencies": {
     "js-yaml": "^4.1.1",
+    "mysql2": "^3.22.5",
     "zeromq": "^6.5.0"
   },
   "author": "Your Name",

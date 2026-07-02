@@ -1,0 +1,56 @@
+<script type="text/html" data-template-name="aiban-result-db">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 节点名称</label>
+        <input type="text" id="node-input-name" placeholder="结果入库">
+    </div>
+    <div class="form-row">
+        <label for="node-input-tableName"><i class="fa fa-table"></i> 目标表</label>
+        <input type="text" id="node-input-tableName" placeholder="icamera_data.workflow_abc_result">
+    </div>
+    <hr>
+    <h4><i class="fa fa-refresh"></i> 重试策略</h4>
+    <div class="form-row">
+        <label for="node-input-maxRetries">最大重试次数</label>
+        <input type="number" id="node-input-maxRetries" min="1" max="10" value="3" style="width:100px;">
+    </div>
+    <div class="form-row">
+        <label for="node-input-retryDelayMs">重试间隔 (ms)</label>
+        <input type="number" id="node-input-retryDelayMs" min="100" max="10000" value="500" style="width:150px;">
+    </div>
+    <div class="form-row">
+        <label for="node-input-queueSize">最大队列长度</label>
+        <input type="number" id="node-input-queueSize" min="10" max="10000" value="1000" style="width:150px;">
+    </div>
+    <hr>
+    <h4><i class="fa fa-info-circle"></i> 说明</h4>
+    <div class="form-row">
+        <label>&nbsp;</label>
+        <span style="font-size:0.85em;color:#888;">
+            仅处理终端事件 (OK/NG/TIMEOUT/INTERRUPTED)。<br>
+            使用 event_id 唯一键确保幂等写入。<br>
+            MySQL 配置通过环境变量 MYSQL_HOST/PORT/USER/PASSWD/DB 设置。<br>
+            写入失败后写入本地 data/workflow/db-failed.jsonl 作为兜底。
+        </span>
+    </div>
+</script>
+
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-result-db", {
+        category: "艾班工作流",
+        color: "#90EE90",
+        defaults: {
+            name: { value: "结果入库" },
+            tableName: { value: "icamera_data.workflow_abc_result" },
+            maxRetries: { value: 3 },
+            retryDelayMs: { value: 500 },
+            queueSize: { value: 1000 },
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-database",
+        paletteLabel: "aiban result db",
+        label: function () {
+            return this.name || "结果入库";
+        },
+    });
+</script>

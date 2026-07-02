@@ -1,0 +1,119 @@
+<script type="text/html" data-template-name="aiban-abc-sequence">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 节点名称</label>
+        <input type="text" id="node-input-name" placeholder="A-B-C顺序检测">
+    </div>
+    <div class="form-row">
+        <label for="node-input-workflow_id"><i class="fa fa-sitemap"></i> Workflow ID</label>
+        <input type="text" id="node-input-workflow_id" placeholder="abc-sequence-demo">
+    </div>
+    <hr>
+    <h4><i class="fa fa-list-ol"></i> 顺序步骤 (A→B→C)</h4>
+    <div class="form-row">
+        <label>&nbsp;</label>
+        <span style="font-size:0.85em;color:#888;">
+            严格按配置顺序执行。格式: ID=步骤标识, Label=标签名, Model ID=模型ID, 置信度=最小阈值
+        </span>
+    </div>
+    <div class="form-row">
+        <ol id="node-input-steps-container" style="margin-left:20px;max-height:300px;overflow-y:auto;"></ol>
+    </div>
+    <hr>
+    <h4><i class="fa fa-clock-o"></i> 超时</h4>
+    <div class="form-row">
+        <label for="node-input-cycle_timeout_ms">周期超时 (ms)</label>
+        <input type="number" id="node-input-cycle_timeout_ms" min="1000" value="30000" style="width:200px;">
+    </div>
+    <div class="form-row">
+        <label for="node-input-allow_same_frame_restart">同帧重启</label>
+        <input type="checkbox" id="node-input-allow_same_frame_restart" style="display:inline-block;width:auto;vertical-align:top;">
+        <span style="font-size:0.85em;color:#888;margin-left:8px;">完成帧中同时识别到A时立即开始新周期</span>
+    </div>
+    <hr>
+    <h4><i class="fa fa-database"></i> 持久化</h4>
+    <div class="form-row">
+        <label for="node-input-stateDbPath">状态数据库路径</label>
+        <input type="text" id="node-input-stateDbPath" placeholder="data/workflow/abc-state.db">
+    </div>
+    <div class="form-row">
+        <label for="node-input-auditDir">审计日志目录</label>
+        <input type="text" id="node-input-auditDir" placeholder="logs/workflow">
+    </div>
+</script>
+
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-abc-sequence", {
+        category: "艾班工作流",
+        color: "#FFA07A",
+        defaults: {
+            name: { value: "A-B-C顺序检测" },
+            workflow_id: { value: "abc-sequence-demo" },
+            steps: { value: [] },
+            cycle_timeout_ms: { value: 30000 },
+            allow_same_frame_restart: { value: false },
+            stateDbPath: { value: "data/workflow/abc-state.db" },
+            auditDir: { value: "logs/workflow" },
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-sort-amount-asc",
+        paletteLabel: "aiban abc sequence",
+        label: function () {
+            return this.name || "A-B-C顺序检测";
+        },
+        oneditprepare: function () {
+            const node = this;
+
+            // Initialize editable list for steps
+            $("#node-input-steps-container").editableList({
+                addButton: true,
+                removable: true,
+                addItem: function (container, i, data) {
+                    const row = $(
+                        '<div class="form-row">'
+                        + '<label style="font-size:0.85em;">步骤 ' + (i + 1) + '</label>'
+                        + '</div>'
+                    );
+                    const fields = $(
+                        '<div style="margin-left:20px;display:flex;gap:8px;flex-wrap:wrap;">'
+                        + '<input type="text" class="step-id" placeholder="ID (如 A)" style="width:60px;">'
+                        + '<input type="text" class="step-model" placeholder="Model ID" style="width:70px;" value="1">'
+                        + '<input type="text" class="step-label" placeholder="Label" style="width:80px;">'
+                        + '<input type="number" class="step-conf" placeholder="最小置信度" style="width:100px;" step="0.01" min="0" max="1" value="0.5">'
+                        + '</div>'
+                    );
+                    container.append(row).append(fields);
+
+                    if (data) {
+                        container.find(".step-id").val(data.id || "");
+                        container.find(".step-model").val(data.model_id || "1");
+                        container.find(".step-label").val(data.label || "");
+                        container.find(".step-conf").val(data.confidence || 0.5);
+                    }
+                },
+            });
+
+            if (Array.isArray(node.steps) && node.steps.length > 0) {
+                for (const s of node.steps) {
+                    $("#node-input-steps-container").editableList("addItem", s);
+                }
+            }
+        },
+        oneditsave: function () {
+            const items = $("#node-input-steps-container").editableList("items");
+            const steps = [];
+            items.each(function () {
+                const $item = $(this);
+                steps.push({
+                    id: $item.find(".step-id").val() || "",
+                    model_id: $item.find(".step-model").val() || "1",
+                    label: $item.find(".step-label").val() || "",
+                    confidence: Number($item.find(".step-conf").val()) || 0.5,
+                });
+            });
+            this.steps = steps.filter(function (s) {
+                return s.id && s.label;
+            });
+        },
+    });
+</script>

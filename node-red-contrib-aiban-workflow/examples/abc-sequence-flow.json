@@ -1,0 +1,170 @@
+[
+    {
+        "id": "phase2-abc-tab",
+        "type": "tab",
+        "label": "Phase 2: A-B-C 顺序检测",
+        "disabled": false,
+        "info": "最小闭环示例: aiban-frame-input → aiban-label-match → aiban-abc-sequence → aiban-result-db\n\n验证 A→B→C 顺序识别、乱序检测、超时处理和幂等入库。"
+    },
+    {
+        "id": "frame-input-abc",
+        "type": "aiban-frame-input",
+        "z": "phase2-abc-tab",
+        "name": "帧输入 (Phase 1)",
+        "endpoint": "tcp://127.0.0.1:5557",
+        "inboxPath": "data/frame_bridge/inbox.db",
+        "showLatency": true,
+        "logEvery": "10",
+        "x": 150,
+        "y": 200,
+        "wires": [
+            ["label-match-abc"],
+            ["debug-screenshot-abc"]
+        ]
+    },
+    {
+        "id": "label-match-abc",
+        "type": "aiban-label-match",
+        "z": "phase2-abc-tab",
+        "name": "标签匹配 A/B/C",
+        "workflow_id": "abc-sequence-demo",
+        "steps": [
+            { "id": "A", "model_id": "1", "label": "A", "confidence": 0.5 },
+            { "id": "B", "model_id": "1", "label": "B", "confidence": 0.5 },
+            { "id": "C", "model_id": "1", "label": "C", "confidence": 0.5 }
+        ],
+        "unmatchedLogLevel": "none",
+        "x": 350,
+        "y": 200,
+        "wires": [["abc-sequence-abc"]]
+    },
+    {
+        "id": "abc-sequence-abc",
+        "type": "aiban-abc-sequence",
+        "z": "phase2-abc-tab",
+        "name": "A→B→C 状态机",
+        "workflow_id": "abc-sequence-demo",
+        "steps": [
+            { "id": "A", "model_id": "1", "label": "A", "confidence": 0.5 },
+            { "id": "B", "model_id": "1", "label": "B", "confidence": 0.5 },
+            { "id": "C", "model_id": "1", "label": "C", "confidence": 0.5 }
+        ],
+        "cycle_timeout_ms": "30000",
+        "allow_same_frame_restart": false,
+        "stateDbPath": "data/workflow/abc-state.db",
+        "auditDir": "logs/workflow",
+        "x": 550,
+        "y": 200,
+        "wires": [["result-db-abc"]]
+    },
+    {
+        "id": "result-db-abc",
+        "type": "aiban-result-db",
+        "z": "phase2-abc-tab",
+        "name": "结果入库 (MySQL)",
+        "tableName": "icamera_data.workflow_abc_result",
+        "maxRetries": "3",
+        "retryDelayMs": "500",
+        "queueSize": "1000",
+        "x": 750,
+        "y": 200,
+        "wires": [["debug-result-abc"]]
+    },
+    {
+        "id": "debug-result-abc",
+        "type": "debug",
+        "z": "phase2-abc-tab",
+        "name": "结果输出",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "abc_result",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 930,
+        "y": 200,
+        "wires": []
+    },
+    {
+        "id": "debug-screenshot-abc",
+        "type": "debug",
+        "z": "phase2-abc-tab",
+        "name": "截图结果",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 350,
+        "y": 280,
+        "wires": []
+    },
+    {
+        "id": "inject-test-abc",
+        "type": "inject",
+        "z": "phase2-abc-tab",
+        "name": "测试: A 帧",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"type\":\"frame\",\"schema_version\":1,\"message_id\":\"test-a-1\",\"session_id\":\"test-session\",\"stream_id\":\"group-1/source-1\",\"frame_seq\":100,\"group_id\":1,\"source_id\":1,\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"A\",\"label_index\":0,\"confidence\":0.9}]}},\"labels\":[{\"model_id\":\"1\",\"label\":\"A\",\"confidence\":0.9}],\"label_summary\":\"m1:A(0.900)\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 140,
+        "wires": [["frame-input-abc"]]
+    },
+    {
+        "id": "inject-test-b",
+        "type": "inject",
+        "z": "phase2-abc-tab",
+        "name": "测试: B 帧",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"type\":\"frame\",\"schema_version\":1,\"message_id\":\"test-b-1\",\"session_id\":\"test-session\",\"stream_id\":\"group-1/source-1\",\"frame_seq\":101,\"group_id\":1,\"source_id\":1,\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"B\",\"label_index\":0,\"confidence\":0.9}]}},\"labels\":[{\"model_id\":\"1\",\"label\":\"B\",\"confidence\":0.9}],\"label_summary\":\"m1:B(0.900)\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 180,
+        "wires": [["frame-input-abc"]]
+    },
+    {
+        "id": "inject-test-c",
+        "type": "inject",
+        "z": "phase2-abc-tab",
+        "name": "测试: C 帧",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"type\":\"frame\",\"schema_version\":1,\"message_id\":\"test-c-1\",\"session_id\":\"test-session\",\"stream_id\":\"group-1/source-1\",\"frame_seq\":102,\"group_id\":1,\"source_id\":1,\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"C\",\"label_index\":0,\"confidence\":0.9}]}},\"labels\":[{\"model_id\":\"1\",\"label\":\"C\",\"confidence\":0.9}],\"label_summary\":\"m1:C(0.900)\"}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "x": 150,
+        "y": 220,
+        "wires": [["frame-input-abc"]]
+    }
+]
