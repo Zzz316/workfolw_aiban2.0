@@ -11,6 +11,7 @@ from core.frame_bridge.bridge import FrameBridge, FrameBridgeConfig
 from core.frame_bridge.outbox import DurableOutbox
 from core.frame_bridge.protocol import (
     canonical_json,
+    finalize_message,
     make_ack,
     make_envelope,
     verify_message,
@@ -257,6 +258,14 @@ class ScreenshotManagerTests(unittest.TestCase):
         self.assertEqual(len(expired), 1)
         self.assertEqual(expired[0][0], "req-t")
 
+    def test_timeout_expires_request_waiting_for_first_frame(self):
+        from core.frame_bridge.screenshot_service import ScreenshotManager
+        mgr = ScreenshotManager(request_ttl_seconds=0.1)
+        mgr.enqueue_request("req-pending", 4, 5)
+        time.sleep(0.2)
+        self.assertEqual(mgr.check_timeouts(), [("req-pending", 4, 5)])
+        self.assertFalse(mgr.has_pending(4, 5))
+
     def test_complete_with_no_in_flight_returns_none(self):
         from core.frame_bridge.screenshot_service import ScreenshotManager
         mgr = ScreenshotManager()
@@ -332,21 +341,58 @@ class FrameBridgeStatsFileTests(unittest.TestCase):
 class FrameBridgeDiskMonitorTests(unittest.TestCase):
     def test_disk_check_is_non_fatal_on_missing_path(self):
         from core.frame_bridge.bridge import FrameBridge, FrameBridgeConfig
-        bridge = FrameBridge(
-            FrameBridgeConfig(
-                enabled=True,
-                outbox_path="/nonexistent/path/should/not/crash/outbox.db",
-                high_watermark=100,
-                low_watermark=1,
-                disk_emergency_percent=0,  # always trigger
-            ),
-        )
-        bridge.transport = FakeTransport()
-        # should not raise
-        bridge._check_disk()
-        # with nonexistent path, disk_stats should be empty (caught by OSError)
-        # or have emergency info if the path partially resolves
-        self.assertIsInstance(bridge._disk_stats, dict)
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = FrameBridge(
+                FrameBridgeConfig(
+                    enabled=True,
+                    outbox_path=str(Path(directory) / "outbox.db"),
+                    high_watermark=100,
+                    low_watermark=1,
+                    disk_emergency_percent=0,  # always trigger
+                ),
+            )
+            bridge.transport = FakeTransport()
+            bridge._check_disk()
+            self.assertIsInstance(bridge._disk_stats, dict)
+            self.assertTrue(bridge._disk_stats["emergency"])
+            bridge.outbox.close()
+
+
+class FrameBridgeControlMessageTests(unittest.TestCase):
+    def test_only_verified_screenshot_request_is_accepted(self):
+        class Manager:
+            def __init__(self):
+                self.requests = []
+
+            def enqueue_request(self, **kwargs):
+                self.requests.append(kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = Manager()
+            bridge = FrameBridge(
+                FrameBridgeConfig(
+                    enabled=True,
+                    outbox_path=str(Path(directory) / "outbox.db"),
+                ),
+                screenshot_manager=manager,
+            )
+            valid = finalize_message({
+                "type": "screenshot_request",
+                "schema_version": 1,
+                "request_id": "req-verified",
+                "group_id": 1,
+                "source_id": 2,
+                "save_roi": True,
+            })
+            bridge._handle_control_message(valid)
+            self.assertEqual(len(manager.requests), 1)
+            self.assertEqual(manager.requests[0]["request_id"], "req-verified")
+
+            invalid = dict(valid)
+            invalid["source_id"] = 99
+            bridge._handle_control_message(invalid)
+            self.assertEqual(len(manager.requests), 1)
+            bridge.outbox.close()
 
 
 class ProtocolScreenshotTests(unittest.TestCase):

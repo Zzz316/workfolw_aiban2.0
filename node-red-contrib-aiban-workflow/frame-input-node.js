@@ -56,9 +56,10 @@ module.exports = function registerFrameInputNode(RED) {
         let inbox;
         let socket;
         let closed = false;
+        let bridgeIdentity = null;
 
         function emitFrame(frame) {
-            node.send({
+            node.send([{
                 _msgid: frame.message_id,
                 topic: frame.stream_id,
                 payload: frame,
@@ -69,8 +70,21 @@ module.exports = function registerFrameInputNode(RED) {
                     frame_seq: frame.frame_seq,
                     timing: frame._timing || null,
                 },
-            });
+            }, null]);
             inbox.markEmitted(frame.message_id);
+        }
+
+        function emitScreenshot(message) {
+            node.send([null, {
+                _msgid: message.request_id,
+                topic: message.type,
+                payload: message,
+                aiban: {
+                    request_id: message.request_id,
+                    group_id: message.group_id,
+                    source_id: message.source_id,
+                },
+            }]);
         }
 
         function emitPending() {
@@ -90,11 +104,19 @@ module.exports = function registerFrameInputNode(RED) {
                 for await (const parts of socket) {
                     if (closed) break;
                     const identity = parts[0];
+                    bridgeIdentity = identity;
                     const body = parts[parts.length - 1];
                     try {
                         const receivedAtMs = Date.now();
                         const persistStarted = process.hrtime.bigint();
                         const envelope = JSON.parse(body.toString("utf8"));
+                        if (envelope.type !== "frame_envelope") {
+                            if (!protocol.isScreenshotResponse(envelope)) {
+                                throw new Error("invalid control message");
+                            }
+                            emitScreenshot(envelope);
+                            continue;
+                        }
                         const unpacked = protocol.unpackEnvelope(envelope);
                         const frame = unpacked.frame;
                         if (frame.type !== "frame"
@@ -173,6 +195,43 @@ module.exports = function registerFrameInputNode(RED) {
                 node.error(`aiban-frame-input failed: ${error.stack || error.message}`);
             }
         }
+
+        node.on("input", function onInput(msg, send, done) {
+            try {
+                if (!socket || !bridgeIdentity) {
+                    throw new Error("AiBan bridge 尚未连接，暂时无法发送截图请求");
+                }
+                const payload = msg.payload || msg;
+                const groupId = Number(payload.group_id ?? payload.groupId);
+                const sourceId = Number(payload.source_id ?? payload.sourceId);
+                if (!Number.isInteger(groupId) || !Number.isInteger(sourceId)) {
+                    throw new Error("截图请求必须包含整数 group_id 和 source_id");
+                }
+                const request = protocol.makeScreenshotRequest(
+                    groupId,
+                    sourceId,
+                    Boolean(payload.save_roi ?? payload.saveRoi),
+                    typeof payload.request_id === "string" ? payload.request_id : ""
+                );
+                socket.send([
+                    bridgeIdentity,
+                    Buffer.from(JSON.stringify(request), "utf8"),
+                ]).then(() => {
+                    node.status({
+                        fill: "blue",
+                        shape: "dot",
+                        text: `截图请求 ${request.request_id}`,
+                    });
+                    if (done) done();
+                }).catch((error) => {
+                    if (done) done(error);
+                    else node.error(error, msg);
+                });
+            } catch (error) {
+                if (done) done(error);
+                else node.error(error, msg);
+            }
+        });
 
         node.on("close", function onClose(done) {
             closed = true;

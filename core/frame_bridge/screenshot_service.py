@@ -129,13 +129,25 @@ class ScreenshotManager:
     # ── called periodically from bridge controller thread ─────────────────
 
     def check_timeouts(self) -> List[Tuple[str, int, int]]:
-        """Return (request_id, group_id, source_id) for expired in-flight requests.
+        """Return expired pending and in-flight requests.
 
         The caller should send ``screenshot_timeout`` notifications for each.
         """
         now = time.monotonic()
         expired: List[Tuple[str, int, int]] = []
         with self._lock:
+            for (group_id, source_id), requests in list(self._pending.items()):
+                active = []
+                for req in requests:
+                    if now - req.created_at >= self.request_ttl_seconds:
+                        self._timed_out_count += 1
+                        expired.append((req.request_id, group_id, source_id))
+                    else:
+                        active.append(req)
+                if active:
+                    self._pending[(group_id, source_id)] = active
+                else:
+                    self._pending.pop((group_id, source_id), None)
             for req_id, req in list(self._in_flight.items()):
                 if now - req.started_at >= self.request_ttl_seconds:
                     del self._in_flight[req_id]

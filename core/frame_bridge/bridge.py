@@ -14,7 +14,7 @@ from typing import Any, Callable, Deque, Dict, Optional, Tuple
 
 from .adapter import FrameAdapter
 from .outbox import DurableOutbox
-from .protocol import beijing_now_iso
+from .protocol import SCHEMA_VERSION, beijing_now_iso, verify_message
 from .transport import ZmqDealerTransport
 
 
@@ -334,6 +334,8 @@ class FrameBridge:
         """Dispatch incoming control messages from Node-RED (non-ACK)."""
         if (
             msg.get("type") == "screenshot_request"
+            and msg.get("schema_version") == SCHEMA_VERSION
+            and verify_message(msg)
             and self.screenshot_manager
             and isinstance(msg.get("request_id"), str)
         ):

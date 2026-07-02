@@ -62,3 +62,24 @@ test("ack includes a valid checksum", () => {
     assert.equal(ack.node_receive_diff_ms, 5);
     assert.equal(ack.node_inbox_persist_ms, 0.75);
 });
+
+test("screenshot request and responses use verified control messages", () => {
+    const request = protocol.makeScreenshotRequest(2, 3, true, "request-1");
+    assert.equal(protocol.verify(request), true);
+    assert.equal(request.type, "screenshot_request");
+    assert.equal(request.group_id, 2);
+    assert.equal(request.source_id, 3);
+    assert.equal(request.save_roi, true);
+
+    const result = protocol.finalize({
+        type: "screenshot_result",
+        schema_version: 1,
+        request_id: "request-1",
+        group_id: 2,
+        source_id: 3,
+        success: true,
+    });
+    assert.equal(protocol.isScreenshotResponse(result), true);
+    result.success = false;
+    assert.equal(protocol.isScreenshotResponse(result), false);
+});

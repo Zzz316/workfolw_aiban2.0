@@ -1,9 +1,10 @@
 # AiBan Workflow 2.0 开发计划书（AI 协作版）
 
-> 文档版本：v1.0  
-> 编制日期：2026-06-29  
-> 工作目录：`D:\workfolw_aiban_2.0`  
-> 目标仓库：`https://github.com/dedezzz0114-tech/workfolw_aiban2.0.git`  
+> 文档版本：v1.1
+> 编制日期：2026-06-29
+> 最近更新：2026-07-01
+> 工作目录：`D:\workfolw_aiban_2.0`
+> 目标仓库：`https://github.com/Zzz316/workfolw_aiban2.0.git`
 > 目标：将工作流执行逻辑从 Python 引擎迁移到 Node-RED，使流程在 Node-RED 中配置后可直接运行。
 
 ---
@@ -597,29 +598,290 @@ D:/workfolw_aiban/node-red-contrib-aiban-workflow
 
 按本文第 7 节执行。
 
-### 阶段 2：Node-RED 基础原子节点
+### 阶段 2：A-B-C 顺序识别最小闭环
 
-建议顺序：
+#### 8.2.1 阶段目标
 
-1. `aiban-frame-input`
-2. `aiban-camera-filter`
-3. `aiban-detect`
-4. `aiban-sub-detect`
-5. `aiban-counter`
-6. `aiban-timer`
-7. `aiban-state`
-8. `aiban-condition`
-9. `aiban-reset`
-10. `aiban-debug`
+阶段 2 不再以一次性开发全部基础原子节点为目标，而是优先实现一个可运行、可观测、可落库、可自动测试的最小业务闭环：
 
-每个节点必须：
+```text
+AiBan SDK 识别标签
+→ Python FrameBridge 可靠传输
+→ Node-RED aiban-frame-input
+→ 标签过滤/匹配
+→ A-B-C 顺序状态机
+→ 生成 OK 或 NG 结果
+→ 幂等写入 MySQL
+→ 输出全过程处理日志和阶段耗时
+```
 
-- 单一职责。
-- 按 flow/group/source 隔离状态。
-- 支持 reset。
-- 在编辑器中显示关键状态。
-- 有单元测试。
-- 说明重启和 Deploy 时的状态策略。
+本阶段的目的，是验证 Node-RED 已经能够真正承担最小业务流程的执行职责，而不只是接收和显示推理帧。
+
+#### 8.2.2 最小节点范围
+
+本阶段只开发或整理闭环必需能力：
+
+1. `aiban-frame-input`：复用阶段 1 已完成的可靠帧入口。
+2. `aiban-label-match`：从标准化帧中按 `model_id + label + confidence` 判断 A、B、C 标签是否出现。
+3. `aiban-sequence`：执行严格的 A → B → C 顺序状态机。
+4. `aiban-result-db`：将一次流程的最终结果幂等写入 MySQL。
+5. `aiban-workflow-audit`：异步记录各阶段事件、状态变化和实际处理耗时。
+6. 一份可直接导入或随项目部署的最小示例流程：`frame-input → label-match → sequence → result-db`。
+
+允许复用并重构现有 `sequence-node.js`，但不得继续让它只负责“导出 Python 工作流 JSON”；阶段 2 的顺序判断必须在 Node-RED 运行时直接执行。
+
+`camera-filter`、`sub-detect`、`counter`、`timer`、通用 `state/condition/reset` 等不属于本阶段必交付项，除非它们是实现上述最小闭环不可缺少的内部模块。
+
+#### 8.2.3 A-B-C 业务规则
+
+默认示例配置：
+
+```json
+{
+  "workflow_id": "abc-sequence-demo",
+  "group_id": 1,
+  "source_id": 1,
+  "steps": [
+    {"id": "A", "model_id": 1, "label": "A", "confidence": 0.5},
+    {"id": "B", "model_id": 1, "label": "B", "confidence": 0.5},
+    {"id": "C", "model_id": 1, "label": "C", "confidence": 0.5}
+  ],
+  "cycle_timeout_ms": 30000
+}
+```
+
+判定要求：
+
+- 空闲状态识别到 A：创建一个新的 `cycle_id`，状态变为 `WAIT_B`。
+- `WAIT_B` 识别到 B：记录 B 完成，状态变为 `WAIT_C`。
+- `WAIT_C` 识别到 C：流程结果为 `OK`，完成本周期并落库。
+- B 在 A 之前、C 在 A/B 完成之前、步骤跳过或顺序错误：结果为 `NG`，必须记录 `failure_reason` 和实际识别步骤。
+- 周期开始后超过 `cycle_timeout_ms` 仍未完成：结果为 `TIMEOUT`，必须落库，不能只写日志。
+- 同一帧重复投递不得重复推进步骤；同一标签连续多帧出现只允许产生一次步骤边沿事件。
+- 一个周期完成后，新的 A 才能启动下一周期；是否允许“完成帧中的 A 同时开启下一周期”必须显式配置，默认不允许。
+- 不匹配 A/B/C 的其他标签不改变状态，但应按可配置级别记录调试日志。
+- 判断使用帧事件时间和 `frame_seq`，不能使用数据库写入完成时间作为业务顺序依据。
+
+状态至少按以下键隔离：
+
+```text
+workflow_id + session_id + group_id + source_id
+```
+
+不同摄像头、不同 SDK session、不同流程之间不得串状态。
+
+#### 8.2.4 标准消息契约
+
+进入顺序节点的消息必须保留：
+
+```text
+message_id
+session_id
+stream_id
+frame_seq
+group_id
+source_id
+sdk_received_at_ms
+node_received_at_ms
+models / labels
+```
+
+标签匹配节点新增但不得覆盖原始字段：
+
+```json
+{
+  "workflow": {
+    "workflow_id": "abc-sequence-demo",
+    "matched_steps": ["A"],
+    "match_started_at_ms": 0,
+    "match_finished_at_ms": 0,
+    "match_duration_ms": 0.0
+  }
+}
+```
+
+顺序节点输出必须包含：
+
+```text
+cycle_id
+previous_state
+current_state
+recognized_step
+expected_step
+result_status
+failure_reason
+cycle_started_at
+cycle_finished_at
+cycle_duration_ms
+event_id
+```
+
+#### 8.2.5 结果落库
+
+阶段 2 使用专用最小结果写入能力，不等待阶段 4 的通用副作用节点。建议表名：
+
+```text
+icamera_data.workflow_abc_result
+```
+
+至少保存以下字段：
+
+| 字段 | 说明 |
+|---|---|
+| `event_id` | 业务幂等键，唯一索引 |
+| `cycle_id` | 本次 A-B-C 周期 ID |
+| `workflow_id` | 流程 ID |
+| `session_id` | SDK 会话 ID |
+| `stream_id` | group/source 流标识 |
+| `group_id` / `source_id` | 视频源 |
+| `start_frame_seq` / `end_frame_seq` | 周期首尾帧 |
+| `actual_sequence` | 实际步骤序列，JSON 或字符串 |
+| `result_status` | `OK`、`NG` 或 `TIMEOUT` |
+| `failure_reason` | 失败或超时原因 |
+| `started_at` / `finished_at` | 北京时间，带毫秒 |
+| `cycle_duration_ms` | 业务周期耗时 |
+| `db_write_duration_ms` | 实际写库耗时 |
+| `created_at` | 数据库记录创建时间 |
+
+数据库要求：
+
+- 提供建表 SQL 或自动迁移脚本。
+- `event_id` 建立唯一索引，重复消息使用 upsert/no-op，不得重复插入。
+- 数据库配置来自环境变量或独立配置文件，不得把密码写入流程 JSON、日志或 Git。
+- 写库必须有超时、有限重试和明确错误输出。
+- 写库失败时不得把结果伪装成成功；至少写入本地失败队列，支持后续重试。
+- 数据库操作不得阻塞帧接收循环；应使用异步队列、worker 或等价机制。
+
+建议 `event_id`：
+
+```text
+workflow_id:session_id:stream_id:cycle_id:result_status
+```
+
+#### 8.2.6 工作流审计日志与实际耗时
+
+日志风格参考：
+
+```text
+D:\workfolw_aiban_2.0\logs\frame_bridge
+```
+
+新增目录：
+
+```text
+D:\workfolw_aiban_2.0\logs\workflow
+```
+
+每次运行至少生成：
+
+```text
+workflow-<run_id>.log
+workflow-<run_id>.jsonl
+workflow-<run_id>-summary.csv
+```
+
+日志必须异步写入，不能阻塞 Node-RED 帧输入。所有事件使用北京时间并保留毫秒，使用 `message_id + event_id + cycle_id` 串联。
+
+每个周期至少记录以下事件：
+
+```text
+frame_received
+label_match_started
+label_match_finished
+sequence_transition
+sequence_completed / sequence_failed / sequence_timeout
+db_write_queued
+db_write_started
+db_write_succeeded / db_write_failed
+```
+
+每条日志至少包含：
+
+```text
+audit_at
+event
+workflow_id
+message_id
+event_id
+cycle_id
+session_id
+stream_id
+frame_seq
+group_id
+source_id
+recognized_labels
+recognized_step
+previous_state
+current_state
+stage_duration_ms
+elapsed_from_frame_ms
+result_status
+error_code
+error_message
+```
+
+可读日志应像 `logs/frame_bridge/transmission-*.log` 一样直接显示处理链，例如：
+
+```text
+[ABC] #128 g1/s1 cycle=... │ 标签匹配 0.42ms → 顺序判断 0.08ms
+      → 写库排队 0.15ms → MySQL 3.60ms │ 累计 4.25ms │ A→B→C OK
+```
+
+CSV 每个周期一行，至少汇总：
+
+- A、B、C 各自首次识别时间和帧号。
+- 标签匹配耗时。
+- 顺序判断耗时。
+- 写库排队耗时。
+- MySQL 写入耗时。
+- 从触发结果到落库完成的累计处理耗时。
+- A 到 C 的业务周期耗时。
+- 最终状态、失败原因、重试次数。
+
+注意区分：
+
+- `cycle_duration_ms`：A 到 C/失败/超时的业务时间。
+- `stage_duration_ms`：某个代码阶段实际执行时间。
+- `elapsed_from_frame_ms`：当前阶段完成时相对原始帧进入 SDK/Node-RED 的累计延迟。
+
+#### 8.2.7 状态持久化和 Deploy 策略
+
+- 至少明确 Node-RED 重启和 Deploy 时当前半成品周期如何处理。
+- 阶段 2 默认采用“恢复未完成周期”；若暂不能恢复，必须在启动后把中断周期落为 `NG/INTERRUPTED`，不得静默丢失。
+- 最近处理的 `message_id/frame_seq` 必须持久化或能从 inbox 重放恢复，避免重启后重复推进。
+- 必须提供手动 reset；reset 需记录原因、操作者/来源和被终止的 `cycle_id`。
+
+#### 8.2.8 自动化测试
+
+至少覆盖：
+
+1. A → B → C，结果 `OK` 且只写库一次。
+2. B → A → C，结果 `NG`，原因可定位。
+3. A → C，识别为跳步 `NG`。
+4. A → B 后超时，结果 `TIMEOUT` 并落库。
+5. A、B、C 分别连续出现多帧，不重复推进。
+6. 同一个 `message_id` 重放，不重复推进、不重复写库。
+7. 两个 source 并行执行，状态互不干扰。
+8. 两个 session 使用相同 frame_seq，状态互不干扰。
+9. MySQL 首次写入失败后有限重试成功。
+10. MySQL 持续不可用，进入失败队列并输出错误日志。
+11. Node-RED 重启/Deploy 后未完成周期按约定恢复或落为 `INTERRUPTED`。
+12. 日志、JSONL、CSV 字段完整，阶段耗时均为非负数。
+
+测试应优先使用模拟标准帧，不依赖真实摄像头；另保留一项真实 AiBan SDK 的现场验收。
+
+#### 8.2.9 完成条件
+
+阶段 2 只有同时满足以下条件才算完成：
+
+- Node-RED 直接执行 A-B-C 顺序逻辑，不经过 Python WorkflowEngine。
+- OK、乱序 NG、跳步 NG、TIMEOUT 都能稳定产生最终结果。
+- 每个最终结果成功写入 MySQL，重放不会重复写库。
+- 日志能从原始 `message_id` 追踪到数据库 `event_id`。
+- 可读日志、JSONL、CSV 都能显示各阶段实际耗时。
+- 自动化测试全部通过并提供一条复现命令。
+- 提供可导入的示例 flow、建表 SQL、配置示例和阶段 2 测试报告。
+- 真实 SDK 环境至少完成一次 A → B → C → MySQL → 日志的现场演示。
 
 ### 阶段 3：业务模式迁移
 
@@ -627,7 +889,7 @@ D:/workfolw_aiban/node-red-contrib-aiban-workflow
 
 1. monitor
 2. timer_record
-3. sequence
+3. 扩展 sequence（多步骤、计数、持续时间、可选步骤、循环）
 4. custom_flow/state_machine
 5. cycle-record
 6. Python handler 兼容
@@ -655,7 +917,7 @@ D:/workfolw_aiban/node-red-contrib-aiban-workflow
 迁移：
 
 - alarm
-- save-db
+- 通用 save-db（阶段 2 的 A-B-C 专用结果写入在本阶段继续抽象）
 - speaker
 - socket server/client
 - api-trigger
@@ -775,6 +1037,11 @@ workflow_id:session_id:stream_id:event_type:event_seq
 | Node-RED 在线状态 | instance |
 | 磁盘使用率 | path |
 | 工作流异常数 | flow/node |
+| 标签匹配耗时 | workflow/stream |
+| 顺序状态转换耗时 | workflow/stream/state |
+| 业务周期耗时 | workflow/stream/result |
+| 写库排队和执行耗时 | workflow/table/result |
+| 写库失败和重试次数 | workflow/table/error |
 
 日志必须能够使用 `message_id` 串联：
 
@@ -786,6 +1053,21 @@ SDK callback
 → Node-RED workflow
 → alarm/save-db/api-output
 ```
+
+阶段 2 起，工作流日志还必须能继续串联：
+
+```text
+frame_received
+→ label_match
+→ A/B/C sequence transition
+→ final result
+→ db queue
+→ MySQL result row
+```
+
+FrameBridge 传输日志与 workflow 业务日志职责分离，但必须通过同一个
+`message_id` 关联。业务周期级事件再使用 `cycle_id` 和 `event_id` 关联，
+不得只输出无法检索的自然语言日志。
 
 ---
 
@@ -900,18 +1182,18 @@ Commit ID：
 
 ## 14. 当前下一步
 
-按以下顺序开始：
+阶段 1 的可靠帧通道和前三项代码闭环已经完成。当前按以下顺序实施阶段 2：
 
-1. 确认目标 GitHub 仓库是否可访问。
-2. 将当前目录恢复为有效 Git 工作区，或重新克隆仓库后迁入当前代码。
-3. 找回 `node-red-contrib-aiban-workflow` 自定义节点源码。
-4. 修复 Node-RED 的旧绝对路径。
-5. 创建 `v2.0-node-red-runtime` 分支。
-6. 编写正式的 `FRAME_PROTOCOL.md`。
-7. 建立不经过 SDK 的模拟帧发生器和 Node-RED 接收压测。
-8. 实现 Python metadata adapter。
-9. 实现 durable outbox、ACK、重传和背压。
-10. 完成第一阶段测试报告后，再开始业务节点迁移。
+1. 冻结并测试阶段 2 标准消息契约。
+2. 提供 `workflow_abc_result` 建表 SQL 和数据库 `.example` 配置。
+3. 实现 `aiban-label-match`，输出 A/B/C 边沿事件和匹配耗时。
+4. 将 `aiban-sequence` 改为 Node-RED 运行时直接执行的 A-B-C 状态机。
+5. 实现专用、异步、幂等的 `aiban-result-db`。
+6. 实现 `aiban-workflow-audit` 可读日志、JSONL 和 CSV 汇总。
+7. 组合并提交最小示例 flow。
+8. 完成模拟帧自动化测试和故障注入测试。
+9. 生成 `docs/TEST_REPORT_PHASE_2.md`。
+10. 在真实 AiBan SDK 和 MySQL 环境完成一次端到端演示。
 
 ---
 
@@ -929,4 +1211,3 @@ Commit ID：
 8. Node-RED 重放消息时，所有副作用必须幂等。
 9. 1.0 引擎在 2.0 完成现场验证前必须保留为回退路径。
 10. 每次代码更新必须测试、提交、推送并记录说明。
-

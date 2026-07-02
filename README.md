@@ -212,15 +212,18 @@ FrameBridge 运行统计（JSON）：
 ## 测试
 
 ```powershell
-# Python 单元测试（16 cases）
+# 一键运行第一阶段全部自动化测试
+python tools/run_phase1_tests.py
+
+# Python 单元测试（18 cases）
 python -m unittest tests.test_frame_bridge -v
 
-# Python↔Node 集成测试
-python tests/test_zmq_integration.py
+# Python↔Node 集成测试（含 ACK 丢失重发）
+python -m unittest tests.test_zmq_integration -v
 
-# Node.js 单元测试（3 cases）
+# Node.js 单元测试（4 cases）
 cd node-red-contrib-aiban-workflow
-node --test test/*.test.js
+npm test
 ```
 
 ---

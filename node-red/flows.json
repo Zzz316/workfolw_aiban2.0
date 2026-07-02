@@ -21,6 +21,9 @@
         "wires": [
             [
                 "36e56b4f4c238002"
+            ],
+            [
+                "aiban-screenshot-debug"
             ]
         ]
     },
@@ -38,6 +41,41 @@
         "statusType": "auto",
         "x": 700,
         "y": 160,
+        "wires": []
+    },
+    {
+        "id": "aiban-screenshot-inject",
+        "type": "inject",
+        "z": "28c978f12126f179",
+        "name": "请求截图 g1/s1",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "payload": "{\"group_id\":1,\"source_id\":1,\"save_roi\":false}",
+        "payloadType": "json",
+        "x": 200,
+        "y": 360,
+        "wires": [
+            [
+                "6a1b3184c39b5840"
+            ]
+        ]
+    },
+    {
+        "id": "aiban-screenshot-debug",
+        "type": "debug",
+        "z": "28c978f12126f179",
+        "name": "截图结果",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "x": 710,
+        "y": 360,
         "wires": []
     }
 ]

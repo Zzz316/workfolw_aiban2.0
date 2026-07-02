@@ -64,6 +64,27 @@ function makeAck(frame) {
     });
 }
 
+function makeScreenshotRequest(groupId, sourceId, saveRoi = false, requestId = "") {
+    return finalize({
+        type: "screenshot_request",
+        schema_version: SCHEMA_VERSION,
+        request_id: requestId || crypto.randomUUID(),
+        group_id: Number(groupId),
+        source_id: Number(sourceId),
+        save_roi: Boolean(saveRoi),
+        requested_at: beijingNowISO(),
+    });
+}
+
+function isScreenshotResponse(message) {
+    return Boolean(
+        verify(message)
+        && message.schema_version === SCHEMA_VERSION
+        && (message.type === "screenshot_result" || message.type === "screenshot_timeout")
+        && typeof message.request_id === "string"
+    );
+}
+
 function unpackEnvelope(envelope) {
     if (!envelope || envelope.type !== "frame_envelope"
         || envelope.schema_version !== SCHEMA_VERSION
@@ -80,5 +101,13 @@ function unpackEnvelope(envelope) {
 }
 
 module.exports = {
-    SCHEMA_VERSION, canonicalize, checksum, finalize, makeAck, unpackEnvelope, verify
+    SCHEMA_VERSION,
+    canonicalize,
+    checksum,
+    finalize,
+    isScreenshotResponse,
+    makeAck,
+    makeScreenshotRequest,
+    unpackEnvelope,
+    verify,
 };

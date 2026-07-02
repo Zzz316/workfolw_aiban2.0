@@ -80,7 +80,7 @@
 |---|---|---|
 | `test_screenshot_result_is_checksummed` | ✅ PASS | 验证 screenshot_result 和 screenshot_timeout 消息的 checksum |
 
-### 总计：**16/16 PASS**
+### 总计：**18/18 PASS**
 
 ---
 
@@ -94,7 +94,7 @@
 | `inbox persists once and preserves pending frames after restart` | ✅ PASS | 验证 inbox INSERT OR IGNORE 去重、跨重启持久化 |
 | `ack includes a valid checksum` | ✅ PASS | 验证 Node.js 端生成的 ACK 包含合法 checksum |
 
-### 总计：**3/3 PASS**
+### 总计：**4/4 PASS**
 
 ---
 
@@ -105,6 +105,7 @@
 | 测试 | 状态 | 说明 |
 |---|---|---|
 | `test_frame_delivery_and_ack` | ✅ PASS | 端到端：Python DEALER → Node ROUTER → inbox 持久化 → ACK → outbox 确认 |
+| `test_lost_ack_retries_without_duplicate_inbox_record` | ✅ PASS | 首个 ACK 丢失后重发，Node inbox 仍保持 message_id 唯一 |
 
 该测试在本地启动真实的 `node` 子进程（`zmq-receiver-once.js`），通过临时端口完成一次完整的帧交付。
 
@@ -128,7 +129,7 @@
 | 多路摄像头压力测试 | 尚未执行 |
 | Node-RED 长时间离线恢复（5/30 分钟） | 单元测试覆盖了 outbox/inbox 重启恢复，长时间离线场景待验证 |
 | 网络中断/乱序注入 | 未系统模拟（envelope checksum 和 message_id 去重已有基础防护） |
-| 截图双向通道 | 代码已实现，需在真实 SDK 环境验证 videoSaveImageFunc 回调 |
+| 截图双向通道 | Node-RED 请求、Python 校验、SDK 排队、结果/超时返回已闭环；仍需真实 SDK 验证 videoSaveImageFunc 回调 |
 | 磁盘高水位实际触发 | disk 检查代码已实现，但未在满载场景验证 backpressure 效果 |
 | 跨主机 ZMQ 部署 | 当前仅验证了本地 tcp://127.0.0.1 通信 |
 

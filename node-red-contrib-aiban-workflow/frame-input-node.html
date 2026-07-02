@@ -9,8 +9,9 @@
             showLatency: { value: true },
             logEvery: { value: 1 }
         },
-        inputs: 0,
-        outputs: 1,
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ["视频帧", "截图结果"],
         icon: "bridge.svg",
         label: function () { return this.name || "AiBan 帧输入"; }
     });
@@ -41,6 +42,8 @@
 
 <script type="text/html" data-help-name="aiban-frame-input">
     <p>接收 Python AiBan 帧桥数据。消息持久化到 SQLite inbox 后才返回 ACK。</p>
+    <p>输入截图请求：<code>msg.payload={group_id, source_id, save_roi?, request_id?}</code>。
+       第一输出为视频帧，第二输出为截图结果或超时通知。</p>
     <p><code>msg.payload</code> 为标准化帧，重复 message_id 不会重复输出。</p>
     <p>标签与时间：<code>msg.payload.label_summary</code>、
        <code>sdk_received_at</code>、<code>node_received_at</code>、

@@ -29,9 +29,9 @@ Status: **代码收尾完成，核心功能已实现并通过测试**
 
 ### Tests
 
-- Python: **16 tests pass** (`tests/test_frame_bridge.py`)
-- Node.js: **3 tests pass** (`test/frame-core.test.js`)
-- Integration: **1 test pass** (`tests/test_zmq_integration.py`)
+- Python: **18 tests pass** (`tests/test_frame_bridge.py`)
+- Node.js: **4 tests pass** (`test/frame-core.test.js`)
+- Integration: **2 tests pass** (`tests/test_zmq_integration.py`)
 
 ### Docs
 
@@ -55,7 +55,7 @@ Status: **代码收尾完成，核心功能已实现并通过测试**
 - 24 小时稳定性测试
 - 多路摄像头压力测试
 - Node-RED 长时间离线（5/30 分钟）恢复
-- 截图双向通道的 videoSaveImageFunc 回调验证
+- 截图双向通道已完成协议与自动化闭环；`videoSaveImageFunc` 真实硬件回调仍需现场验证
 - 磁盘高水位背压实际触发测试
 
 ---

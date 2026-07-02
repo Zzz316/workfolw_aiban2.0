@@ -77,3 +77,17 @@ See `config/frame_bridge.env.example`.
 - `AIBAN_V2_BRIDGE_ENABLED=1` enables frame delivery.
 - `AIBAN_V1_ENGINE_ENABLED=1` keeps the legacy engine running for shadow
   comparison.
+
+## Screenshot control channel
+
+The `aiban-frame-input` node also acts as the bidirectional control endpoint:
+
+- Send `msg.payload = {group_id, source_id, save_roi?, request_id?}` into the
+  node to request a screenshot.
+- Output 1 emits persisted video frames.
+- Output 2 emits verified `screenshot_result` or `screenshot_timeout` messages.
+- Every control message uses the same schema version and canonical SHA-256
+  checksum rules as ACK messages. Invalid or modified control messages are
+  rejected.
+- Requests time out even when the selected source produces no subsequent
+  frame.
