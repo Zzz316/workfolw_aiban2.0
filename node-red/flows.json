@@ -25,7 +25,7 @@
         "restartPolicy": "never",
         "maxRestartCount": 3,
         "restartBackoffMs": 5000,
-        "autoStart": true,
+        "autoStart": false,
         "x": 340,
         "y": 200,
         "wires": [

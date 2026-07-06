@@ -581,6 +581,17 @@ module.exports = function registerAibanRuntimeNode(RED) {
             return;
         }
 
+        // Runner protocol messages are always JSON objects. The native AiBan
+        // DLL writes several unrelated diagnostic formats to inherited stdout
+        // (timestamped lines, "MCMOT ...", "Total ...", and others). Treat
+        // every non-object line as native output. Object-shaped lines still go
+        // through strict parsing, so broken/half/glued protocol messages remain
+        // observable as PARSE_ERROR.
+        if (!trimmed.startsWith("{")) {
+            this.log(`[python:native] ${trimmed.substring(0, 500)}`);
+            return;
+        }
+
         let event;
         try {
             event = JSON.parse(trimmed);

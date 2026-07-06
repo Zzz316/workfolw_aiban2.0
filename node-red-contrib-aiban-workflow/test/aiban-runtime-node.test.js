@@ -237,7 +237,7 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
     test("4. Invalid JSON on stdout produces PARSE_ERROR on port 3", async () => {
         const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
 
-        proc.stdout.push("this is not valid json at all\n");
+        proc.stdout.push("{this is not valid json at all\n");
         await delay(100);
 
         const warns = node._logs.filter(l => l.level === "warn");
@@ -251,6 +251,54 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         node._onClose(false, () => {});
     });
 
+    test("4b. Known AiBan native DLL log does not produce PARSE_ERROR", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, {
+            autoStart: false,
+            strictStdout: true,
+        });
+
+        proc.stdout.push(
+            "[2026-07-06 11:04:33.714][warning][video] set default loglevel: info\n"
+        );
+        await delay(100);
+
+        const parseErrors = getPortMessages(node, 2).filter(
+            e => e && e.payload && e.payload.error_code === "PARSE_ERROR"
+        );
+        assert.strictEqual(parseErrors.length, 0);
+        assert.ok(
+            node._logs.some(l => l.msg && l.msg.includes("[python:native]")),
+            "Native DLL line should remain visible in the node log"
+        );
+
+        node._onClose(false, () => {});
+    });
+
+    test("4c. Plain AiBan native diagnostics do not produce PARSE_ERROR", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, {
+            autoStart: false,
+            strictStdout: true,
+        });
+
+        proc.stdout.push(
+            "Total [2026-07-06 11:26:25] frames: 1\n"
+            + "Max lost time: 0\n"
+            + "MCMOT tracker inited done\n"
+        );
+        await delay(100);
+
+        const parseErrors = getPortMessages(node, 2).filter(
+            e => e && e.payload && e.payload.error_code === "PARSE_ERROR"
+        );
+        assert.strictEqual(parseErrors.length, 0);
+        const nativeLogs = node._logs.filter(
+            l => l.msg && l.msg.includes("[python:native]")
+        );
+        assert.strictEqual(nativeLogs.length, 3);
+
+        node._onClose(false, () => {});
+    });
+
     // ==================================================================
     // Test 5: Long invalid line truncated
     // ==================================================================
@@ -258,7 +306,7 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
     test("5. Long invalid JSON line is truncated in error message", async () => {
         const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
 
-        proc.stdout.push("x".repeat(5000) + "\n");
+        proc.stdout.push("{" + "x".repeat(4999) + "\n");
         await delay(100);
 
         const errors = getPortMessages(node, 2);
@@ -331,7 +379,7 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
     test("9. Oversized stdout line is safely handled", async () => {
         const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
 
-        proc.stdout.push("NOT_JSON:" + "y".repeat(100 * 1024) + "\n");
+        proc.stdout.push("{" + "y".repeat(100 * 1024) + "\n");
         await delay(200);
 
         const errors = getPortMessages(node, 2);
@@ -348,7 +396,7 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
     test("10. Non-strict mode logs invalid stdout as debug without PARSE_ERROR", async () => {
         const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false, strictStdout: false });
 
-        proc.stdout.push("diagnostic text from AiBan DLL\n");
+        proc.stdout.push("{diagnostic text from AiBan DLL\n");
         await delay(100);
 
         const warns = node._logs.filter(l => l.level === "warn");

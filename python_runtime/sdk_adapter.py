@@ -313,7 +313,12 @@ class SdkAdapter:
             try:
                 if len(args) >= 3:
                     msg_type, status, messages = args[:3]
-                    level = "error" if bool(status) else "info"
+                    # AiBan SDK uses True for success. Accreditation success is
+                    # emitted periodically, so suppress it just as the legacy
+                    # runtime did; otherwise it floods Node-RED every ~20s.
+                    if "accredit" in str(msg_type).lower() and bool(status):
+                        return
+                    level = "info" if bool(status) else "error"
                     message = "type={} status={} message={}".format(
                         msg_type, status, messages
                     )
