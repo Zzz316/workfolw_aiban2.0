@@ -7,14 +7,15 @@
 <script type="text/javascript">
     RED.nodes.registerType("aiban-runtime", {
         category: "AiBan",
-        color: "#2C3E50",
+        color: "#7EC8E3",
         defaults: {
             name: { value: "aiban-runtime" },
-            pythonPath: { value: "python" },
+            pythonPath: { value: "D:/my_env/python.exe" },
             runnerPath: { value: "" },
-            sdkHome: { value: "" },
-            pipelineConfig: { value: "" },
+            sdkHome: { value: "D:/product/AiBanWorkSpace" },
+            pipelineConfig: { value: "D:/product/AiBanWorkSpace/abvideo/main-flow.yaml" },
             workingDirectory: { value: "" },
+            useMock: { value: false },
             startupTimeoutMs: { value: 30000, validate: RED.validators.number() },
             shutdownTimeoutMs: { value: 10000, validate: RED.validators.number() },
             heartbeatIntervalMs: { value: 5000, validate: RED.validators.number() },
@@ -28,6 +29,23 @@
         outputs: 3,
         icon: "bridge.svg",
         paletteLabel: "aiban-runtime",
+        button: {
+            toggle: "autoStart",
+            onclick: function () {
+                const node = this;
+                const action = node.autoStart ? "start" : "stop";
+                $.ajax({
+                    url: `aiban-runtime/${node.id}/${action}`,
+                    type: "POST",
+                    error: function (jqXHR) {
+                        RED.notify(
+                            `aiban-runtime ${action} 失败：${jqXHR.responseText || jqXHR.statusText}`,
+                            "error"
+                        );
+                    },
+                });
+            },
+        },
 
         label: function () {
             return this.name || "aiban-runtime";
@@ -76,7 +94,7 @@
         <div id="tab-paths">
             <div class="form-row">
                 <label for="node-input-pythonPath"><i class="fa fa-terminal"></i> Python 路径</label>
-                <input type="text" id="node-input-pythonPath" placeholder="python">
+                <input type="text" id="node-input-pythonPath" placeholder="D:/my_env/python.exe">
                 <span class="form-tip">指定 Python 解释器，禁止只依赖系统 PATH</span>
             </div>
             <div class="form-row">
@@ -97,6 +115,11 @@
             <div class="form-row">
                 <label for="node-input-workingDirectory"><i class="fa fa-folder-open"></i> 工作目录</label>
                 <input type="text" id="node-input-workingDirectory" placeholder="Python 子进程工作目录（可选）">
+            </div>
+            <div class="form-row">
+                <label for="node-input-useMock"><i class="fa fa-flask"></i> 运行模式</label>
+                <input type="checkbox" id="node-input-useMock" style="display:inline-block; width:auto; vertical-align:top;">
+                <span>使用模拟 SDK（测试时勾选，现场运行不要勾选）</span>
             </div>
             <div class="form-row">
                 <label for="node-input-autoStart"><i class="fa fa-play"></i> 自动启动</label>

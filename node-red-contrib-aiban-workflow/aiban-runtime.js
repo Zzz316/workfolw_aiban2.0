@@ -18,9 +18,11 @@
 
 "use strict";
 
-const { spawn } = require("node:child_process");
+const { spawn: systemSpawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
+const { performance } = require("node:perf_hooks");
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,11 +37,33 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 30000;
 const DEFAULT_MAX_RESTART_COUNT = 3;
 const DEFAULT_RESTART_BACKOFF_MS = 5000;
 const MAX_RESTART_BACKOFF_MS = 60000;
+const DEFAULT_SDK_HOME = "D:/product/AiBanWorkSpace";
+const DEFAULT_PIPELINE_CONFIG = "D:/product/AiBanWorkSpace/abvideo/main-flow.yaml";
 
 const VALID_COMMANDS = new Set([
     "start", "stop", "restart", "health",
     "pause_source", "resume_source", "screenshot",
 ]);
+
+function resolvePythonPath(configuredPath) {
+    if (configuredPath && configuredPath.toLowerCase() !== "python") {
+        return configuredPath;
+    }
+
+    const localAppData = process.env.LOCALAPPDATA || "";
+    const candidates = [
+        process.env.AIBAN_PYTHON_PATH,
+        "D:/my_env/python.exe",
+        localAppData && path.join(localAppData, "Programs", "Python", "Python39", "python.exe"),
+        localAppData && path.join(localAppData, "Programs", "Python", "Python310", "python.exe"),
+        localAppData && path.join(localAppData, "Programs", "Python", "Python38", "python.exe"),
+        localAppData && path.join(localAppData, "Programs", "Python", "Python37", "python.exe"),
+    ].filter(Boolean);
+
+    return candidates.find((candidate) => fs.existsSync(candidate))
+        || configuredPath
+        || "python";
+}
 
 // ---------------------------------------------------------------------------
 // Node registration
@@ -54,11 +78,12 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
         // --- Configuration ---
         this.name = config.name || "aiban-runtime";
-        this.pythonPath = config.pythonPath || "python";
+        this.pythonPath = resolvePythonPath(config.pythonPath || "python");
         this.runnerPath = config.runnerPath || "";
-        this.sdkHome = config.sdkHome || "";
-        this.pipelineConfig = config.pipelineConfig || "";
+        this.sdkHome = config.sdkHome || DEFAULT_SDK_HOME;
+        this.pipelineConfig = config.pipelineConfig || DEFAULT_PIPELINE_CONFIG;
         this.workingDirectory = config.workingDirectory || "";
+        this.useMock = config.useMock === true;
         this.startupTimeoutMs = parseInt(config.startupTimeoutMs) || DEFAULT_STARTUP_TIMEOUT_MS;
         this.shutdownTimeoutMs = parseInt(config.shutdownTimeoutMs) || DEFAULT_SHUTDOWN_TIMEOUT_MS;
         this.heartbeatIntervalMs = parseInt(config.heartbeatIntervalMs) || DEFAULT_HEARTBEAT_INTERVAL_MS;
@@ -67,6 +92,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this.maxRestartCount = parseInt(config.maxRestartCount) || DEFAULT_MAX_RESTART_COUNT;
         this.restartBackoffMs = parseInt(config.restartBackoffMs) || DEFAULT_RESTART_BACKOFF_MS;
         this.autoStart = config.autoStart !== undefined ? config.autoStart : true;
+        this.strictStdout = config.strictStdout !== undefined ? config.strictStdout : true;
+
+        // --- Spawn injection (for testing) ---
+        this._spawnFn = config._spawn || systemSpawn;
 
         // --- Runtime state ---
         this._process = null;
@@ -74,18 +103,28 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._lastEventSeq = -1;
         this._ready = false;
         this._stopping = false;
+        this._restartAfterStop = false;
         this._restartCount = 0;
         this._currentBackoff = 0;
         this._heartbeatTimer = null;
         this._startupTimer = null;
         this._pendingCommands = new Map();  // request_id → { resolve, reject, timer }
         this._shutdownInitiated = false;
+        this._auditText = null;
 
         // --- Resolve runner path ---
         if (!this.runnerPath) {
-            // Default: look for python_runtime/aiban_runner.py relative to this file
-            this.runnerPath = path.join(__dirname, "..", "python_runtime", "aiban_runner.py");
+            // Prefer the project layout beside Node-RED's userDir. This remains
+            // correct when this package is loaded through node_modules junctions.
+            const candidates = [
+                path.resolve(RED.settings.userDir, "..", "python_runtime", "aiban_runner.py"),
+                path.resolve(__dirname, "..", "python_runtime", "aiban_runner.py"),
+            ];
+            this.runnerPath = candidates.find((candidate) => fs.existsSync(candidate))
+                || candidates[0];
         }
+
+        this._openAuditLogs();
 
         // --- Set initial status ---
         this._setStatus("yellow", "configured");
@@ -93,6 +132,15 @@ module.exports = function registerAibanRuntimeNode(RED) {
         // --- Event handlers ---
         this.on("input", this._onInput.bind(this));
         this.on("close", this._onClose.bind(this));
+
+        // Defer process creation until Node-RED has finished constructing this
+        // specific node instance.  This must live inside the constructor so
+        // `node` refers to the deployed node rather than the module scope.
+        setTimeout(() => {
+            if (!node._shutdownInitiated && node.autoStart) {
+                node._startProcess();
+            }
+        }, 100);
     }
 
     // ==================================================================
@@ -111,6 +159,77 @@ module.exports = function registerAibanRuntimeNode(RED) {
             shape: shapeMap[color] || "ring",
             text: `${this.name}: ${text}`,
         });
+    };
+
+    AibanRuntimeNode.prototype._openAuditLogs = function () {
+        try {
+            const directory = path.resolve(
+                RED.settings.userDir, "..", "logs", "frame_bridge"
+            );
+            fs.mkdirSync(directory, { recursive: true });
+            const now = new Date();
+            const stamp = `${now.getFullYear()}`
+                + `${String(now.getMonth() + 1).padStart(2, "0")}`
+                + `${String(now.getDate()).padStart(2, "0")}-`
+                + `${String(now.getHours()).padStart(2, "0")}`
+                + `${String(now.getMinutes()).padStart(2, "0")}`
+                + `${String(now.getSeconds()).padStart(2, "0")}`;
+            const safeId = String(this.id || "runtime")
+                .replace(/[^a-zA-Z0-9_-]/g, "_");
+            const base = `runtime-${stamp}-${safeId}`;
+            const textPath = path.join(directory, `${base}.log`);
+            this._auditText = fs.createWriteStream(
+                textPath, { flags: "a", encoding: "utf8" }
+            );
+            this._auditText.write(
+                "┌──────────┬────────────────────────────────────────────────────────────┬────────────┬──────────────────┐\n"
+                + "│ 帧号     │ SDK转换 → Python排队 → 进程管道 → Node输出                │ 累计耗时    │ 标签 / 时间       │\n"
+                + "├──────────┼────────────────────────────────────────────────────────────┼────────────┼──────────────────┤\n"
+            );
+            this.log(`Frame timing log: ${textPath}`);
+        } catch (err) {
+            this.warn(`Cannot open frame timing log: ${err.message}`);
+        }
+    };
+
+    AibanRuntimeNode.prototype._writeFrameAudit = function (payload, eventSeq) {
+        if (!this._auditText) return;
+        const nodeReceivedAtMs = performance.timeOrigin + performance.now();
+        const sdkReceivedAtMs = Number(payload.sdk_received_at_ms || 0);
+        const pythonStdoutAtMs = Number(payload.python_stdout_at_ms || 0);
+        const sdkConvertMs = Number(payload.sdk_convert_ms || 0);
+        const pythonQueueMs = Number(payload.python_queue_ms || 0);
+        const pipeMs = pythonStdoutAtMs
+            ? Math.max(0, nodeReceivedAtMs - pythonStdoutAtMs)
+            : 0;
+        const totalMs = sdkReceivedAtMs
+            ? Math.max(0, nodeReceivedAtMs - sdkReceivedAtMs)
+            : sdkConvertMs + pythonQueueMs + pipeMs;
+        const streamId = payload.stream_id
+            || `group-${payload.group_id}/source-${payload.source_id}`;
+        const shortStream = String(streamId)
+            .replace("group-", "g").replace("source-", "s");
+        const labels = [];
+        for (const [modelId, result] of Object.entries(payload.models || {})) {
+            for (const box of (result && result.boxes) || []) {
+                labels.push(
+                    `m${modelId}:${box.label || ""}`
+                    + `(${Number(box.confidence || 0).toFixed(3)})`
+                );
+            }
+        }
+        const labelText = labels.length ? labels.join("; ") : "-";
+        const timeText = new Date(nodeReceivedAtMs).toLocaleTimeString(
+            "zh-CN", { hour12: false }
+        );
+        this._auditText.write(
+            `[PIPE] #${String(eventSeq).padEnd(5)} ${shortStream} │ `
+            + `SDK转换 ${sdkConvertMs.toFixed(2).padStart(7)}ms → `
+            + `Python排队 ${pythonQueueMs.toFixed(2).padStart(7)}ms → `
+            + `管道 ${pipeMs.toFixed(2).padStart(7)}ms │ `
+            + `∑ ${totalMs.toFixed(2).padStart(7)}ms │ `
+            + `${labelText} │ ${timeText}\n`
+        );
     };
 
     // ==================================================================
@@ -197,7 +316,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
     // Process management
     // ==================================================================
 
-    AibanRuntimeNode.prototype._startProcess = function () {
+    AibanRuntimeNode.prototype._startProcess = function (forceAutoStart) {
         if (this._process && !this._process.killed) {
             this.warn("Process already running, not starting");
             return;
@@ -209,10 +328,15 @@ module.exports = function registerAibanRuntimeNode(RED) {
         const args = [
             "-u",  // unbuffered stdout/stderr
             this.runnerPath,
-            "--mock",
             "--heartbeat-interval", String(this.heartbeatIntervalMs / 1000),
         ];
 
+        if (this.useMock) {
+            args.push("--mock");
+        }
+        if (this.sdkHome) {
+            args.push("--sdk-home", this.sdkHome);
+        }
         if (this.pipelineConfig) {
             args.push("--pipeline-config", this.pipelineConfig);
         }
@@ -228,7 +352,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this.log(`Spawning: ${this.pythonPath} ${args.join(" ")}`);
 
         try {
-            this._process = spawn(this.pythonPath, args, options);
+            this._process = this._spawnFn(this.pythonPath, args, options);
         } catch (err) {
             this.error(`Failed to spawn process: ${err.message}`);
             this._setStatus("red", "spawn failed");
@@ -262,6 +386,9 @@ module.exports = function registerAibanRuntimeNode(RED) {
         // --- Process exit handler ---
         this._process.on("exit", (code, signal) => {
             this.log(`Python process exited: code=${code} signal=${signal}`);
+            const restartAfterStop = this._stopping
+                && this._restartAfterStop
+                && !this._shutdownInitiated;
             this._process = null;
             this._ready = false;
             this._clearTimers();
@@ -273,10 +400,21 @@ module.exports = function registerAibanRuntimeNode(RED) {
             }
             this._pendingCommands.clear();
 
-            if (!this._stopping && !this._shutdownInitiated) {
+            if (restartAfterStop) {
+                this._stopping = false;
+                this._restartAfterStop = false;
+                this._setStatus("yellow", "restarting");
+                setTimeout(() => {
+                    if (!this._shutdownInitiated) {
+                        this._startProcess(true);
+                    }
+                }, 200);
+            } else if (!this._stopping && !this._shutdownInitiated) {
                 this._setStatus("red", `exited code=${code}`);
                 this._maybeRestart(code, signal);
             } else {
+                this._stopping = false;
+                this._restartAfterStop = false;
                 this._setStatus("grey", "stopped");
             }
         });
@@ -285,10 +423,23 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._process.on("error", (err) => {
             this.error(`Process error: ${err.message}`);
             this._setStatus("red", "process error");
+            this.send([
+                null,
+                null,
+                {
+                    topic: "aiban/error",
+                    payload: {
+                        error_code: "PROCESS_ERROR",
+                        message: err.message,
+                        python_path: this.pythonPath,
+                        runner_path: this.runnerPath,
+                    },
+                },
+            ]);
         });
 
         // --- Auto-start ---
-        if (this.autoStart) {
+        if (forceAutoStart === true || this.autoStart) {
             // Give the runner a moment to initialize, then send start
             setTimeout(() => {
                 this._sendCommand({
@@ -298,6 +449,23 @@ module.exports = function registerAibanRuntimeNode(RED) {
                     params: {},
                 }).catch((err) => {
                     this.warn(`Auto-start failed: ${err.message}`);
+                    if (this._startupTimer) {
+                        clearTimeout(this._startupTimer);
+                        this._startupTimer = null;
+                    }
+                    this._setStatus("red", "SDK start failed");
+                    this.send([
+                        null,
+                        null,
+                        {
+                            topic: "aiban/error",
+                            payload: {
+                                error_code: "SDK_START_FAILED",
+                                message: err.message,
+                            },
+                            aiban: { runtime_id: this.id },
+                        },
+                    ]);
                 });
             }, 500);
 
@@ -417,21 +585,34 @@ module.exports = function registerAibanRuntimeNode(RED) {
         try {
             event = JSON.parse(trimmed);
         } catch (err) {
-            this.warn(`Invalid JSON on stdout: ${trimmed.substring(0, 200)}`);
-            // Emit parse error to port 3
-            this.send([
-                null,
-                null,
-                {
-                    topic: "aiban/error",
-                    payload: {
-                        error_code: "PARSE_ERROR",
-                        message: `Invalid JSON on stdout: ${err.message}`,
-                        raw: trimmed.substring(0, 500),
+            // Non-JSON content on stdout is a protocol violation under strict
+            // mode.  In non-strict mode (real AiBan DLL may write diagnostics
+            // to stdout), log at debug level and skip silently.
+            const truncated = trimmed.length > 255
+                ? trimmed.substring(0, 255) + "..."
+                : trimmed;
+            this.warn(`stdout parse error: ${err.message} | raw: ${truncated}`);
+            if (this.strictStdout) {
+                this.send([
+                    null,  // port 1
+                    null,  // port 2
+                    {
+                        topic: "aiban/error",
+                        payload: {
+                            error_code: "PARSE_ERROR",
+                            message: `Invalid JSON on stdout: ${err.message}`,
+                            details: {
+                                raw_preview: truncated,
+                                raw_length: trimmed.length,
+                                parse_error: err.message,
+                            },
+                        },
+                        aiban: { runtime_id: this.id },
                     },
-                    aiban: { runtime_id: this.id },
-                },
-            ]);
+                ]);
+            } else {
+                this.log(`[python:native] ${truncated}`);
+            }
             return;
         }
 
@@ -544,6 +725,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
     AibanRuntimeNode.prototype._handleFrameEvent = function (event, sessionId, eventSeq) {
         const payload = event.payload || {};
         const streamId = payload.stream_id || "";
+        this._writeFrameAudit(payload, eventSeq);
 
         // Output port 1: inference frame
         this.send([
@@ -648,6 +830,12 @@ module.exports = function registerAibanRuntimeNode(RED) {
     AibanRuntimeNode.prototype._onClose = function (removed, done) {
         this._shutdownInitiated = true;
         this._clearTimers();
+        const closeAuditLogs = () => {
+            if (this._auditText) {
+                this._auditText.end();
+                this._auditText = null;
+            }
+        };
 
         if (this._process && !this._process.killed) {
             // Send stop and wait briefly
@@ -673,30 +861,47 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
             this._process.on("exit", () => {
                 clearTimeout(killTimer);
+                closeAuditLogs();
                 done();
             });
         } else {
+            closeAuditLogs();
             done();
         }
     };
 
-    // ==================================================================
-    // Deploy — kick off
-    // ==================================================================
-
-    // Start the process when the node is deployed
-    // In Node-RED, the constructor is called during deploy, so we start here
-    // but defer to allow the runtime to finish setting up
-    setTimeout(() => {
-        if (!AibanRuntimeNode.prototype._shutdownInitiated) {
-            AibanRuntimeNode.prototype._boundStart =
-                AibanRuntimeNode.prototype._boundStart ||
-                function () {
-                    this._startProcess();
-                };
-            this._startProcess();
+    RED.httpAdmin.post(
+        "/aiban-runtime/:id/:action",
+        RED.auth.needsPermission("aiban-runtime.write"),
+        function controlRuntime(req, res) {
+            const node = RED.nodes.getNode(req.params.id);
+            const action = req.params.action;
+            if (!node) {
+                res.sendStatus(404);
+                return;
+            }
+            if (action === "start") {
+                node.autoStart = true;
+                if (node._stopping && node._process) {
+                    node._restartAfterStop = true;
+                    node._setStatus("yellow", "waiting to restart");
+                    res.sendStatus(202);
+                    return;
+                }
+                node._startProcess(true);
+                res.sendStatus(200);
+                return;
+            }
+            if (action === "stop") {
+                node.autoStart = false;
+                node._restartAfterStop = false;
+                node._stopProcess(false);
+                res.sendStatus(200);
+                return;
+            }
+            res.sendStatus(400);
         }
-    }, 100);
+    );
 
     // Register the node type
     RED.nodes.registerType("aiban-runtime", AibanRuntimeNode);

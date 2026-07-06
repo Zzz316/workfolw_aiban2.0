@@ -87,11 +87,22 @@ class OutputWriter:
 
     def _run(self) -> None:
         """Main loop: dequeue events and write to stdout."""
+        import time
         while self._running:
             event = self._queue.get(timeout=0.5)
             if event is None:
                 continue
             try:
+                if event.get("type") == "frame":
+                    payload = event.get("payload") or {}
+                    stdout_at_ms = time.time_ns() / 1_000_000
+                    payload["python_stdout_at_ms"] = round(stdout_at_ms, 3)
+                    enqueued_at_ms = payload.get("python_enqueued_at_ms")
+                    if enqueued_at_ms is not None:
+                        payload["python_queue_ms"] = round(
+                            max(0, stdout_at_ms - float(enqueued_at_ms)),
+                            3,
+                        )
                 data = encode_event(event)
                 sys.stdout.buffer.write(data)
                 sys.stdout.buffer.flush()
@@ -180,6 +191,15 @@ class AibanRunner:
         if not self._lifecycle.is_ready():
             return
 
+        # Pre-check: if next frame would hit high watermark, pause the
+        # busiest source BEFORE enqueuing to avoid filling the queue.
+        if self._output_queue.would_exceed_high_watermark():
+            self._check_watermarks_pre_put()
+
+        import time
+        frame_data["python_enqueued_at_ms"] = round(
+            time.time_ns() / 1_000_000, 3
+        )
         event = make_envelope(
             event_type="frame",
             session_id=self._lifecycle.session_id,
@@ -189,10 +209,34 @@ class AibanRunner:
 
         ok = self._output_queue.put(event)
         if not ok:
-            logging.getLogger(__name__).warning(
-                "Frame dropped: queue full (depth=%d)",
+            # Queue is full — pause was not fast enough.  Emit an
+            # observable error; the frame is rejected, not silently dropped.
+            logging.getLogger(__name__).error(
+                "Frame REJECTED: queue full (depth=%d/%d, overflow=%d)",
                 self._output_queue.depth,
+                self._output_queue.capacity,
+                self._output_queue.overflow_count,
             )
+            # Emit overflow error event so Node-RED can see it
+            err_event = make_envelope(
+                event_type="runtime_error",
+                session_id=self._lifecycle.session_id,
+                event_seq=self._lifecycle.next_seq(),
+                payload={
+                    "error_code": "QUEUE_OVERFLOW",
+                    "message": (
+                        f"Queue full ({self._output_queue.depth}/"
+                        f"{self._output_queue.capacity}), frame rejected"
+                    ),
+                    "details": {
+                        "queue_depth": self._output_queue.depth,
+                        "capacity": self._output_queue.capacity,
+                        "overflow_count": self._output_queue.overflow_count,
+                    },
+                },
+            )
+            self._output_queue.put(err_event)
+            return
 
         # Track per-source frame counts for watermark management
         stream_id = frame_data.get("stream_id", f"group-{group_id}/source-{source_id}")
@@ -200,7 +244,7 @@ class AibanRunner:
             self._source_frame_counts.get(stream_id, 0) + 1
         )
 
-        # Check watermarks and pause/resume sources
+        # Post-check watermarks and pause/resume sources
         self._check_watermarks()
 
     # ------------------------------------------------------------------
@@ -242,29 +286,48 @@ class AibanRunner:
     # Watermark management
     # ------------------------------------------------------------------
 
+    def _pause_busiest_source(self) -> None:
+        """Pause the video source with the most pending frames in the queue.
+
+        Called pre-emptively when the queue is about to hit the high watermark.
+        Safe to call multiple times — already-paused sources are skipped.
+        """
+        logger = logging.getLogger(__name__)
+        if not self._source_frame_counts:
+            return
+        busiest = max(self._source_frame_counts, key=self._source_frame_counts.get)
+        if busiest in self._lifecycle.paused_sources:
+            return
+        logger.warning(
+            "Queue at high watermark (%d/%d), pausing %s",
+            self._output_queue.depth, self._output_queue.capacity, busiest,
+        )
+        self._lifecycle.add_paused_source(busiest)
+        parts = busiest.split("/")
+        if len(parts) == 2:
+            try:
+                gid = int(parts[0].split("-")[1])
+                sid = int(parts[1].split("-")[1])
+                self._sdk_adapter.source_control(gid, sid, False)
+            except (IndexError, ValueError):
+                pass
+
+    def _check_watermarks_pre_put(self) -> None:
+        """Pre-emptive check: pause the busiest source BEFORE the queue fills.
+
+        Called when would_exceed_high_watermark() returns True.
+        """
+        self._pause_busiest_source()
+
     def _check_watermarks(self) -> None:
-        """Check queue watermarks and pause/resume sources accordingly."""
+        """Check queue watermarks and pause/resume sources accordingly.
+
+        Post-put check: pause if above high watermark, resume if below low.
+        """
         logger = logging.getLogger(__name__)
 
         if self._output_queue.is_above_high_watermark():
-            # Find the source with the most pending frames and pause it
-            if self._source_frame_counts:
-                busiest = max(self._source_frame_counts, key=self._source_frame_counts.get)
-                if busiest not in self._lifecycle.paused_sources:
-                    logger.warning(
-                        "Queue at high watermark (%d/%d), pausing %s",
-                        self._output_queue.depth, self._output_queue.capacity, busiest,
-                    )
-                    self._lifecycle.add_paused_source(busiest)
-                    # Parse stream_id: "group-N/source-M"
-                    parts = busiest.split("/")
-                    if len(parts) == 2:
-                        try:
-                            gid = int(parts[0].split("-")[1])
-                            sid = int(parts[1].split("-")[1])
-                            self._sdk_adapter.source_control(gid, sid, False)
-                        except (IndexError, ValueError):
-                            pass
+            self._pause_busiest_source()
 
             # Emit warning event
             event = make_envelope(
@@ -284,8 +347,8 @@ class AibanRunner:
             self._output_queue.put(event)
 
         elif self._output_queue.is_below_low_watermark():
-            # Resume paused sources
-            for stream_id in self._lifecycle.paused_sources:
+            # Resume all paused sources
+            for stream_id in list(self._lifecycle.paused_sources):
                 logger.info("Queue at low watermark, resuming %s", stream_id)
                 parts = stream_id.split("/")
                 if len(parts) == 2:

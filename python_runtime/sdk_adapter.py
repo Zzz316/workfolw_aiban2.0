@@ -16,6 +16,18 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _is_sdk_success(result: Any) -> bool:
+    """Accept AiBan success values across wrapper/extension variants."""
+    if result is True:
+        return True
+    if getattr(result, "name", None) == "aSUCCESS":
+        return True
+    value = getattr(result, "value", result)
+    if isinstance(value, tuple) and value:
+        value = value[0]
+    return value == 0
+
+
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
@@ -131,10 +143,10 @@ class MockMetadata:
         self._datetime = datetime.datetime.now()
 
     def getModelInferBoxs(self, model_id: int):
-        """Return (err, [boxes]) for a given model."""
+        """Return (ok, [boxes]) for a given model."""
         import random
         if model_id not in self._model_ids:
-            return (0, [])
+            return (False, [])
         boxes = []
         for idx, label in enumerate(self._labels):
             # Cycle through labels so each frame has some variety
@@ -146,10 +158,10 @@ class MockMetadata:
                     tracker_id=self._counter * 100 + idx,
                     polygon=[[0, 0], [100, 0], [100, 100], [0, 100]],
                 ))
-        return (0, boxes)
+        return (True, boxes)
 
     def getAllModelInferBoxes(self):
-        """Return {model_id: (err, [boxes])} for all models."""
+        """Return {model_id: (ok, [boxes])} for all models."""
         result = {}
         for mid in self._model_ids:
             result[str(mid)] = self.getModelInferBoxs(mid)
@@ -179,11 +191,17 @@ class MockBox:
     def getLabelName(self) -> str:
         return self._label
 
+    def getLabelIndex(self) -> int:
+        return self._label_index
+
     def getConfidence(self) -> float:
         return self._confidence
 
     def getPolygon(self) -> list:
         return self._polygon
+
+    def getTrackerId(self) -> int:
+        return self._tracker_id
 
     def getInferBoxWithModelID(self, sub_id: int):
         """Return (err, [sub_boxes]). No sub-models in mock by default."""
@@ -212,6 +230,9 @@ class SdkAdapter:
         self._use_mock = use_mock
         self._mock_config = mock_config or {}
         self._sdk = None
+        self._sdk_module = None
+        self._lite_sdk_module = None
+        self._dll_directory = None
         self._frame_handler: Optional[FrameCallback] = None
         self._event_handler: Optional[EventCallback] = None
         self._pipeline_started = False
@@ -235,22 +256,31 @@ class SdkAdapter:
             return MockAibanSDK(self._mock_config)
         else:
             logger.info("SdkAdapter: loading real AiBan SDK from %s", self._sdk_home)
-            # Import the real SDK — it's typically on sys.path via sdk_home
+            # The deployed SDK exposes version-specific extension modules.
             import importlib
+            import os
+            if self._sdk_home and os.path.isdir(self._sdk_home):
+                if self._sdk_home not in sys.path:
+                    sys.path.append(self._sdk_home)
+                if hasattr(os, "add_dll_directory"):
+                    self._dll_directory = os.add_dll_directory(self._sdk_home)
+
+            video_module_name = "libAiBanVideoPy{}_{}".format(
+                sys.version_info.major, sys.version_info.minor
+            )
+            lite_module_name = "libAiBanLitePy{}_{}".format(
+                sys.version_info.major, sys.version_info.minor
+            )
             try:
-                aiban = importlib.import_module("AiBanVideoPy")
-                return aiban.aibanVideoGetInstance()
-            except ImportError:
-                # Fallback: try adding sdk_home to path
-                import os
-                if self._sdk_home and os.path.isdir(self._sdk_home):
-                    sys.path.insert(0, self._sdk_home)
-                    aiban = importlib.import_module("AiBanVideoPy")
-                    return aiban.aibanVideoGetInstance()
+                self._sdk_module = importlib.import_module(video_module_name)
+                self._lite_sdk_module = importlib.import_module(lite_module_name)
+                return self._sdk_module.aibanVideoGetInstance()
+            except ImportError as exc:
                 raise RuntimeError(
-                    "Cannot import AiBanVideoPy. "
-                    "Set use_mock=True for testing or verify sdk_home path."
-                )
+                    "Cannot import {} / {} from {}: {}".format(
+                        video_module_name, lite_module_name, self._sdk_home, exc
+                    )
+                ) from exc
 
     # ------------------------------------------------------------------
     # Callback registration
@@ -258,6 +288,9 @@ class SdkAdapter:
 
     def _on_frame(self, err: int, group_id: int, source_id: int, metadata) -> None:
         """SDK frame callback — extract all data within callback scope."""
+        import time
+        callback_started_ns = time.perf_counter_ns()
+        sdk_received_at_ms = time.time_ns() / 1_000_000
         if err != 0:
             logger.error("SDK frame callback error: err=%d", err)
             return
@@ -266,15 +299,29 @@ class SdkAdapter:
 
         try:
             frame_data = _extract_frame_data(group_id, source_id, metadata)
+            frame_data["sdk_received_at_ms"] = round(sdk_received_at_ms, 3)
+            frame_data["sdk_convert_ms"] = round(
+                (time.perf_counter_ns() - callback_started_ns) / 1_000_000, 3
+            )
             self._frame_handler(group_id, source_id, frame_data)
         except Exception:
             logger.exception("Error in frame callback extraction")
 
-    def _on_sdk_event(self, level: str, message: str) -> None:
+    def _on_sdk_event(self, *args) -> None:
         """SDK event callback."""
         if self._event_handler:
             try:
-                self._event_handler(level, message)
+                if len(args) >= 3:
+                    msg_type, status, messages = args[:3]
+                    level = "error" if bool(status) else "info"
+                    message = "type={} status={} message={}".format(
+                        msg_type, status, messages
+                    )
+                elif len(args) == 2:
+                    level, message = args
+                else:
+                    level, message = "info", " ".join(str(item) for item in args)
+                self._event_handler(str(level), str(message))
             except Exception:
                 logger.exception("Error in SDK event callback")
 
@@ -297,24 +344,16 @@ class SdkAdapter:
         self._sdk.registerVideoResultFunc(self._on_frame)
         self._sdk.registerVideoMsgEventFunc(self._on_sdk_event)
         result = self._sdk.checkAllConfig(yaml_path)
-        if not result:
+        success = result is True if self._use_mock else _is_sdk_success(result)
+        if not success:
             logger.error("SDK checkAllConfig failed for %s", yaml_path)
-        return result
+        return success
 
     def build_pipeline(self) -> None:
         """Start the SDK pipeline (blocking call in real SDK, non-blocking in mock)."""
-        if self._use_mock:
-            # Mock SDK runs pipeline in background thread
-            self._sdk.buildPipline()
-        else:
-            # Real SDK — buildPipline is blocking, so we run it in a thread
-            import threading
-            self._pipeline_thread = threading.Thread(
-                target=self._sdk.buildPipline, daemon=True
-            )
-            self._pipeline_thread.start()
-            # Give it a moment to start
-            self._pipeline_thread.join(timeout=1.0)
+        result = self._sdk.buildPipline()
+        if not self._use_mock and not _is_sdk_success(result):
+            raise RuntimeError("buildPipline returned {!r}".format(result))
         self._pipeline_started = True
 
     def stop_pipeline(self) -> None:
@@ -359,8 +398,8 @@ def _extract_frame_data(group_id: int, source_id: int, metadata) -> Dict[str, An
     all_models = metadata.getAllModelInferBoxes()
 
     models_data = {}
-    for model_id, (err, boxes) in all_models.items():
-        if err != 0:
+    for model_id, (ok, boxes) in all_models.items():
+        if not ok:
             models_data[str(model_id)] = {"ok": False, "boxes": []}
             continue
 
@@ -423,7 +462,7 @@ def _extract_box_data(box) -> Dict[str, Any]:
 
     return {
         "label": box.getLabelName(),
-        "label_index": 0,  # getLabelIndex not always available
+        "label_index": box.getLabelIndex(),
         "confidence": round(float(box.getConfidence()), 4),
         "polygon": polygon,
         "mask_contours": [],

@@ -128,8 +128,8 @@ workfolw_aiban_2.0/
 
 | 阶段 | 内容 | 状态 |
 |------|------|------|
-| **阶段 0** | **冻结旧架构并重置基线** | 🔧 **进行中** |
-| 阶段 1 | Node-RED 直接启动 Python/AiBan | 📋 |
+| **阶段 0** | **冻结旧架构并重置基线** | ✅ **已完成** |
+| **阶段 1** | **Node-RED 直接启动 Python/AiBan** | 🔧 **进行中** |
 | 阶段 2 | A-B-C 组件拓扑最小闭环 | 📋 |
 | 阶段 3 | 迁移全部业务逻辑组件 | 📋 |
 | 阶段 4 | 迁移副作用组件 | 📋 |
@@ -167,15 +167,17 @@ cd ../node-red
 npm install
 ```
 
-### 启动（待阶段一完成后更新）
+### 启动（新架构）
 
-新架构启动方式（待实现）：
+新架构已实现阶段一核心功能：
 
 ```powershell
 # 仅需启动 Node-RED（aiban-runtime 节点会自动管理 Python 子进程）
 cd node-red
 npx node-red --settings settings.js
 ```
+
+开发测试时可在 aiban-runtime 节点配置中启用 `useMock` 开关，无需真实 AiBan 硬件。
 
 旧架构启动方式（已冻结，仅用于回退）：
 
@@ -192,12 +194,21 @@ python main.py
 ## 测试
 
 ```powershell
+# 新架构阶段一测试（Python Runner 集成测试）
+cd node-red-contrib-aiban-workflow
+npm run test:phase1       # Python 子进程集成测试（需要 Python 环境）
+
+# 新架构阶段一测试（Node-RED 节点组件测试）
+node --test test/aiban-runtime-node.test.js   # aiban-runtime.js 节点测试（无 Python 依赖）
+
+# 全量测试
+npm test                  # 包含所有阶段一和阶段二测试
+
 # 旧架构测试（保留，用于回退验证）
 python -m unittest tests.test_frame_bridge -v
-cd node-red-contrib-aiban-workflow && npm test
 
-# 新架构测试（待创建）
-cd node-red-contrib-aiban-workflow && npm run test:runtime
+# Windows 孤儿进程检查
+powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 ```
 
 ---

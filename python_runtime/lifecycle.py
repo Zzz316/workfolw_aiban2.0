@@ -50,8 +50,13 @@ class BoundedOutputQueue:
     Supports:
       - Capacity limit
       - High/low watermark tracking
-      - Overflow detection (oldest frame dropped)
+      - Overflow detection (rejects new frames when full — never evicts)
       - Queue depth statistics
+
+    Design invariant:
+      - High watermark triggers source pause → prevents queue from filling.
+      - If queue still reaches capacity (pause didn't take effect in time),
+        the frame is REJECTED and overflow_count increments — no silent drops.
     """
 
     def __init__(self, capacity: int = DEFAULT_QUEUE_CAPACITY):
@@ -60,6 +65,7 @@ class BoundedOutputQueue:
         self._high_watermark = int(capacity * HIGH_WATERMARK_RATIO)
         self._low_watermark = int(capacity * LOW_WATERMARK_RATIO)
         self._drops = 0
+        self._overflow_count = 0
         self._enqueued = 0
         self._lock = threading.Lock()
 
@@ -73,13 +79,24 @@ class BoundedOutputQueue:
 
     @property
     def drops(self) -> int:
+        """Total frames evicted (kept for backward compat; always 0 now)."""
         with self._lock:
             return self._drops
+
+    @property
+    def overflow_count(self) -> int:
+        """Number of frames rejected because the queue was full."""
+        with self._lock:
+            return self._overflow_count
 
     @property
     def enqueued(self) -> int:
         with self._lock:
             return self._enqueued
+
+    @property
+    def is_full(self) -> bool:
+        return self._queue.full()
 
     @property
     def high_watermark(self) -> int:
@@ -95,11 +112,20 @@ class BoundedOutputQueue:
     def is_below_low_watermark(self) -> bool:
         return self.depth <= self._low_watermark
 
+    def would_exceed_high_watermark(self) -> bool:
+        """Check if the NEXT enqueue would reach or exceed the high watermark.
+
+        Call this BEFORE enqueuing to trigger a pre-emptive source pause.
+        """
+        return (self.depth + 1) >= self._high_watermark
+
     def put(self, event: Dict[str, Any]) -> bool:
         """Put an event onto the queue.
 
         Returns:
-            True if the event was enqueued, False if it was dropped (queue full).
+            True if the event was enqueued, False if the queue is full.
+            When False, the caller MUST handle the rejection — the frame
+            is NOT silently dropped and no existing frames are evicted.
         """
         try:
             self._queue.put_nowait(event)
@@ -107,21 +133,9 @@ class BoundedOutputQueue:
                 self._enqueued += 1
             return True
         except queue.Full:
-            # Drop the oldest item to make room
-            try:
-                self._queue.get_nowait()
-                self._queue.task_done()
-                with self._lock:
-                    self._drops += 1
-                # Now try again
-                self._queue.put_nowait(event)
-                with self._lock:
-                    self._enqueued += 1
-                return True
-            except queue.Full:
-                with self._lock:
-                    self._drops += 1
-                return False
+            with self._lock:
+                self._overflow_count += 1
+            return False
 
     def get(self, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
         """Get an event from the queue, blocking up to timeout seconds.
@@ -259,6 +273,9 @@ class LifecycleManager:
                         "uptime_seconds": round(self.uptime_seconds, 1),
                         "frames_emitted": self._frames_emitted,
                         "queue_depth": self._output_queue.depth,
+                        "queue_capacity": self._output_queue.capacity,
+                        "queue_overflow_count": self._output_queue.overflow_count,
+                        "queue_is_full": self._output_queue.is_full,
                         "paused_sources": self.paused_sources,
                     },
                 )

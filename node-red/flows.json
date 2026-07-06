@@ -8,30 +8,59 @@
         "env": []
     },
     {
-        "id": "6a1b3184c39b5840",
-        "type": "aiban-frame-input",
+        "id": "7f59e2d67dde1743",
+        "type": "aiban-runtime",
         "z": "28c978f12126f179",
-        "name": "",
-        "endpoint": "tcp://127.0.0.1:5557",
-        "inboxPath": "data/frame_bridge/inbox.db",
-        "showLatency": true,
-        "logEvery": "",
-        "x": 470,
-        "y": 280,
+        "name": "aiban-runtime",
+        "pythonPath": "python",
+        "runnerPath": "",
+        "sdkHome": "D:/product/AiBanWorkSpace",
+        "pipelineConfig": "D:/product/AiBanWorkSpace/abvideo/main-flow.yaml",
+        "workingDirectory": "",
+        "useMock": false,
+        "startupTimeoutMs": 30000,
+        "shutdownTimeoutMs": 10000,
+        "heartbeatIntervalMs": 5000,
+        "heartbeatTimeoutMs": 15000,
+        "restartPolicy": "never",
+        "maxRestartCount": 3,
+        "restartBackoffMs": 5000,
+        "autoStart": true,
+        "x": 340,
+        "y": 200,
         "wires": [
             [
-                "36e56b4f4c238002"
+                "fd6e9e333856d89a"
             ],
             [
-                "aiban-screenshot-debug"
+                "f89df019c25d07ba"
+            ],
+            [
+                "e0c74e10b8b073d8"
             ]
         ]
     },
     {
-        "id": "36e56b4f4c238002",
+        "id": "fd6e9e333856d89a",
         "type": "debug",
         "z": "28c978f12126f179",
         "name": "debug 1",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 620,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "e0c74e10b8b073d8",
+        "type": "debug",
+        "z": "28c978f12126f179",
+        "name": "debug 3",
         "active": true,
         "tosidebar": true,
         "console": false,
@@ -39,43 +68,24 @@
         "complete": "false",
         "statusVal": "",
         "statusType": "auto",
-        "x": 700,
-        "y": 160,
+        "x": 580,
+        "y": 300,
         "wires": []
     },
     {
-        "id": "aiban-screenshot-inject",
-        "type": "inject",
-        "z": "28c978f12126f179",
-        "name": "请求截图 g1/s1",
-        "props": [
-            {
-                "p": "payload"
-            }
-        ],
-        "payload": "{\"group_id\":1,\"source_id\":1,\"save_roi\":false}",
-        "payloadType": "json",
-        "x": 200,
-        "y": 360,
-        "wires": [
-            [
-                "6a1b3184c39b5840"
-            ]
-        ]
-    },
-    {
-        "id": "aiban-screenshot-debug",
+        "id": "f89df019c25d07ba",
         "type": "debug",
         "z": "28c978f12126f179",
-        "name": "截图结果",
-        "active": true,
+        "name": "debug 2",
+        "active": false,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
-        "complete": "payload",
-        "targetType": "msg",
-        "x": 710,
-        "y": 360,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 580,
+        "y": 160,
         "wires": []
     }
 ]
