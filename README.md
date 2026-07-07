@@ -2,7 +2,7 @@
 
 > AiBan 智能视频分析平台 —— 工作流引擎 2.0（架构重启版）
 > 将业务编排从 Python 引擎迁移到 Node-RED，Node-RED 直接管理 Python/AiBan 子进程。
-> 当前阶段：**Phase 0（冻结旧架构，重置基线）**
+> 当前阶段：**Phase 2（A-B-C 组件拓扑最小闭环）**
 
 ---
 
@@ -70,7 +70,7 @@ workfolw_aiban_2.0/
 ├── WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md  # 开发总纲（架构重启版）
 ├── WORKFLOW_DOC.md                     # 1.0 引擎功能文档（参考）
 │
-├── python_runtime/                     # [NEW] Python AiBan Runner（待创建）
+├── python_runtime/                     # Python AiBan Runner（阶段一已验收）
 │   ├── aiban_runner.py                 #   Runner 主入口
 │   ├── sdk_adapter.py                  #   AiBan SDK 适配器
 │   ├── protocol.py                     #   JSON Lines 协议编解码
@@ -86,7 +86,7 @@ workfolw_aiban_2.0/
 │   └── infra.py                        # 基础设施
 │
 ├── node-red-contrib-aiban-workflow/    # Node-RED 自定义节点包
-│   ├── aiban-runtime.js/.html          # [NEW] Runtime 管理节点（待创建）
+│   ├── aiban-runtime.js/.html          # Runtime 管理节点（阶段一已验收）
 │   ├── aiban-label.js/.html            # 标签匹配节点
 │   ├── aiban-result.js/.html           # 结果聚合节点
 │   ├── aiban-result-db.js/.html        # 结果入库节点
@@ -129,8 +129,8 @@ workfolw_aiban_2.0/
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | **阶段 0** | **冻结旧架构并重置基线** | ✅ **已完成** |
-| **阶段 1** | **Node-RED 直接启动 Python/AiBan** | 🔧 **进行中** |
-| 阶段 2 | A-B-C 组件拓扑最小闭环 | 📋 |
+| **阶段 1** | **Node-RED 直接启动 Python/AiBan** | ✅ **已完成** |
+| **阶段 2** | **A-B-C 组件拓扑最小闭环** | 🔧 **进行中** |
 | 阶段 3 | 迁移全部业务逻辑组件 | 📋 |
 | 阶段 4 | 迁移副作用组件 | 📋 |
 | 阶段 5 | 运行管理 | 📋 |
@@ -169,7 +169,7 @@ npm install
 
 ### 启动（新架构）
 
-新架构已实现阶段一核心功能：
+新架构阶段一已完成，当前以 Node-RED 作为启动入口：
 
 ```powershell
 # 仅需启动 Node-RED（aiban-runtime 节点会自动管理 Python 子进程）
@@ -226,7 +226,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 9. **过载时优先暂停视频源，不允许静默丢帧**
 10. **Deploy、停止和异常退出必须正确回收 Python/AiBan 进程**
 11. **1.0 全部现用功能完成对等迁移和现场验证后，才允许发布 2.0**
-12. **新阶段一验收前，不删除旧架构代码**
+12. **阶段二验收前，保留旧架构回退能力；旧 ZMQ 主链路不再新增功能**
 
 ---
 
@@ -238,4 +238,5 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 | [`WORKFLOW_DOC.md`](WORKFLOW_DOC.md) | 1.0 引擎功能文档 |
 | [`docs/LEGACY_ZMQ_MIGRATION.md`](docs/LEGACY_ZMQ_MIGRATION.md) | 旧架构代码处置清单 |
 | [`docs/WORKFLOW_1_0_PARITY_MATRIX.md`](docs/WORKFLOW_1_0_PARITY_MATRIX.md) | 1.0 功能对等矩阵 |
+| [`docs/PHASE2_MESSAGE_CONTRACT.md`](docs/PHASE2_MESSAGE_CONTRACT.md) | 新阶段二消息契约 |
 | [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | 现场环境记录 |

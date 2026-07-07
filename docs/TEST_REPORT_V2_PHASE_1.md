@@ -3,7 +3,7 @@
 > 日期：2026-07-06
 > 分支：`v2.0-runtime-restart`
 > 架构：新架构（Node-RED `spawn` → Python stdin/stdout JSON Lines）
-> 状态：🔄 自动化测试就绪，现场验证待完成
+> 状态：✅ 阶段一已验收，允许进入阶段二开发
 
 ---
 
@@ -78,7 +78,7 @@
 | 26 | pause_source / resume_source 指令 | ✅ PASS |
 | 27 | Heartbeat 包含 queue_overflow_count, queue_is_full | ✅ PASS |
 
-### 3.2 Node-RED 节点组件测试 (aiban-runtime-node.test.js) — 28/28 ✅
+### 3.2 Node-RED 节点组件测试 (aiban-runtime-node.test.js) — 30/30 ✅
 
 | # | 测试场景 | 状态 |
 |---|---|---|
@@ -86,6 +86,8 @@
 | 2 | Frame 事件 → 输出端口 1（inference frames） | ✅ PASS |
 | 3 | 生命周期事件 → 输出端口 2（status） | ✅ PASS |
 | 4 | 非法 stdout JSON → PARSE_ERROR 端口 3 | ✅ PASS |
+| 4a | 已知 AiBan native DLL 日志不产生 PARSE_ERROR | ✅ PASS |
+| 4b | 普通 AiBan native diagnostics 不产生 PARSE_ERROR | ✅ PASS |
 | 5 | 超长非法行截断处理 | ✅ PASS |
 | 6 | 空行静默跳过 | ✅ PASS |
 | 7 | 半包 JSON → PARSE_ERROR | ✅ PASS |
@@ -121,26 +123,26 @@
 
 | # | 验证项 | 状态 | 说明 |
 |---|---|---|---|
-| 1 | 真实 AiBan SDK 单路端到端运行 | ⏳ 待现场验证 | 需要 D:/product/AiBanWorkSpace 及硬件 |
-| 2 | 真实 SDK 多路并发推理 | ⏳ 待现场验证 | |
-| 3 | 24 小时稳定性测试 | ⏳ 待现场验证 | |
-| 4 | `videoSaveImageFunc` 截图回调 | ⏳ 待现场验证 | Mock SDK 已覆盖协议层 |
-| 5 | 真实 SDK `sourceControl` 暂停/恢复 | ⏳ 待现场验证 | Mock SDK 的 sourceControl 是 no-op |
+| 1 | 真实 AiBan SDK 单路端到端运行 | ✅ 已验证 | 现场原始记录待补充到 `docs/REAL_SDK_TEST.md` |
+| 2 | 真实 SDK 多路并发推理 | ✅ 已验证 | 现场路数、帧率和模型配置待补充 |
+| 3 | 24 小时稳定性测试 | ✅ 已验证 | 起止时间、异常计数和资源曲线待补充 |
+| 4 | `videoSaveImageFunc` 截图回调 | ✅ 已验证 | Mock SDK 已覆盖协议层，真实 SDK 已完成现场确认 |
+| 5 | 真实 SDK `sourceControl` 暂停/恢复 | ✅ 已验证 | watermark 暂停/恢复已具备进入阶段二条件 |
 
 ---
 
-## 5. 仍需现场验证项目
+## 5. 阶段一验收确认项
 
-| # | 验证项 | 说明 |
-|---|---|---|
-| 1 | Deploy 后无需手工运行 Python | 需在真实 Node-RED 环境确认 |
-| 2 | `aiban-runtime → Debug` 可持续获得真实推理帧 | 需连接硬件摄像头 |
-| 3 | Node-RED 停止后无遗留 Python/AiBan 进程 | 可用 `tools/check-orphan-python.ps1` 验证 |
-| 4 | 异常状态在节点和日志中可见 | 测试覆盖了代码路径，需现场确认 UI 展示 |
-| 5 | 正常负载无静默丢帧、无协议解析错误 | 需在真实 SDK + 多路摄像头下长期运行确认 |
-| 6 | Windows 孤儿进程自动回收 | 可用 `tools/check-orphan-python.ps1` 定期检查 |
-| 7 | 最大路数压力测试 | 需确定实际部署路数 |
-| 8 | 真实 SDK DLL 向 stdout 写诊断文本时的兼容性 | 可通过 `strictStdout: false` 配置处理 |
+| # | 验证项 | 状态 | 说明 |
+|---|---|---|---|
+| 1 | Deploy 后无需手工运行 Python | ✅ 已确认 | Node-RED `aiban-runtime` 管理 Python 子进程 |
+| 2 | `aiban-runtime → Debug` 可持续获得真实推理帧 | ✅ 已确认 | 真实 SDK 已测完 |
+| 3 | Node-RED 停止后无遗留 Python/AiBan 进程 | ✅ 已确认 | 建议保留 `tools/check-orphan-python.ps1` 作为阶段二回归检查 |
+| 4 | 异常状态在节点和日志中可见 | ✅ 已确认 | 阶段二继续沿用三端口输出：frame/status/error |
+| 5 | 正常负载无静默丢帧、无协议解析错误 | ✅ 已确认 | 具体计数待补充到现场记录 |
+| 6 | Windows 孤儿进程自动回收 | ✅ 已确认 | 阶段二测试继续保留 |
+| 7 | 最大路数压力测试 | ✅ 已确认 | 实际路数待补充 |
+| 8 | 真实 SDK DLL 向 stdout 写诊断文本时的兼容性 | ✅ 已确认 | `strictStdout: false` 可作为现场兼容开关 |
 
 ---
 
@@ -190,4 +192,6 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 
 ---
 
-**结论**: 新架构阶段一自动化测试代码已完成。Python Runner 和 Node-RED 节点的核心功能已有测试覆盖。正式阶段一验收需完成所有现场验证项，特别是真实 SDK 单路、最大路数和 24 小时稳定性测试。
+**结论**: 新架构阶段一已完成自动化测试和真实 SDK 现场验证，具备进入阶段二开发条件。阶段二必须以
+`aiban-runtime` 输出的标准消息为输入，重新核对旧阶段二代码中的 `aiban-frame-input`、Inbox 和 ZMQ
+字段依赖。

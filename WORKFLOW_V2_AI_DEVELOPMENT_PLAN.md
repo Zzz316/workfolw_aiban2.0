@@ -2,7 +2,7 @@
 
 > 文档版本：v2.0（架构重启版）
 > 编制日期：2026-07-02
-> 当前阶段：退回阶段一重新实施
+> 当前阶段：阶段二开发（A-B-C 组件拓扑最小闭环）
 > 工作目录：`D:\workfolw_aiban_2.0`
 
 ---
@@ -35,8 +35,8 @@ Node-RED aiban-runtime 组件
 Node-RED 成为系统的启动入口、运行主控和业务工作流引擎。Python 不再主动通过
 ZeroMQ 向 Node-RED 发送数据，而是作为 Node-RED 组件管理的 AiBan SDK 适配子进程。
 
-本项目从阶段一重新开始。现有阶段一、阶段二的完成状态作废，必须按本计划重新开发、
-测试和验收。
+本项目曾从阶段一重新开始。当前新阶段一已经完成自动化测试和真实 SDK 现场验证，阶段二
+以 `aiban-runtime` 输出的标准 Node-RED 消息为输入，重新实现 A-B-C 组件拓扑最小闭环。
 
 ---
 
@@ -64,7 +64,8 @@ ZeroMQ 向 Node-RED 发送数据，而是作为 Node-RED 组件管理的 AiBan S
 - 独立启动 `main.py` 后等待 Node-RED 接收推理帧。
 
 现有代码暂不立即删除，统一标记为 `legacy-zmq-bridge`，用于迁移对照和必要回退。
-完成新阶段一验收后，再单独评审删除范围。
+新阶段一验收已完成。阶段二开发期间仍保留旧架构代码作为回退和对照，删除范围按
+`docs/LEGACY_ZMQ_MIGRATION.md` 的时间表分阶段评审。
 
 ### 2.3 本阶段非目标
 
@@ -342,6 +343,10 @@ Node-RED 必须配置命令超时；迟到响应只能记录，不能错误完�
 
 ## 阶段 1：Node-RED 直接启动 Python/AiBan
 
+状态：**已完成**。阶段一已交付 `python_runtime/`、`aiban-runtime` 节点、Mock SDK 自动化测试、
+真实 SDK 现场验证和阶段一测试报告。后续阶段不得重新引入 Python 主动连接 Node-RED 的 ZMQ
+主链路。
+
 ### 1.1 协议与 Runner
 
 - 定义 JSON Lines 协议及版本兼容规则。
@@ -391,6 +396,10 @@ Node-RED 必须配置命令超时；迟到响应只能记录，不能错误完�
 
 ## 阶段 2：A-B-C 组件拓扑最小闭环
 
+状态：**进行中**。阶段二从旧 ZMQ 版阶段二重新核对契约后开始，输入源必须切换为
+`aiban-runtime` 第一输出端口的标准 `msg`，不得依赖 `aiban-frame-input`、Inbox、ZMQ
+传输字段或 SQLite 中转字段。
+
 流程：
 
 ```text
@@ -401,6 +410,16 @@ aiban-runtime
 → result
 → result-db
 ```
+
+阶段二启动前必须先完成以下文档和契约更新：
+
+1. 更新 `docs/PHASE2_MESSAGE_CONTRACT.md`，以 `aiban-runtime` 输出的 `msg.payload` 和
+   `msg.aiban` 为唯一输入契约。
+2. 更新 `node-red-contrib-aiban-workflow/examples/abc-sequence-flow.json`，将入口节点从
+   `aiban-frame-input` 替换为 `aiban-runtime`。
+3. 补齐 `aiban-label → aiban-result → aiban-result-db` 的字段保留规则、幂等键和错误输出约定。
+4. 明确旧阶段二测试中可复用的状态机/写库测试，以及必须废弃的 ZMQ/Inbox 断言。
+5. 在功能对等矩阵中把阶段二相关能力标为“迁移中”，待 Mock SDK 与真实 SDK 闭环通过后再标为完成。
 
 原则：
 
@@ -417,6 +436,7 @@ aiban-runtime
 - 仅改变画布连线即可改变识别顺序。
 - 最终结果可幂等写入 MySQL。
 - 有组件级日志和端到端处理耗时。
+- 阶段二测试报告记录 Mock SDK、真实 SDK、MySQL 写库和异常路径结果。
 
 ## 阶段 3：迁移全部业务逻辑组件
 
@@ -565,6 +585,28 @@ docs/
 - 安装依赖和环境变量示例
 - 功能对等矩阵
 
+阶段二至少交付：
+
+```text
+docs/
+├── PHASE2_MESSAGE_CONTRACT.md          # 新阶段二 runtime 输入契约
+└── TEST_REPORT_V2_PHASE_2.md           # 新阶段二测试报告（待创建）
+
+node-red-contrib-aiban-workflow/
+├── aiban-label.js/.html                # 适配 aiban-runtime frame msg
+├── aiban-result.js/.html               # A-B-C 拓扑状态机
+├── aiban-result-db.js/.html            # result_event_id 幂等写库
+├── examples/abc-sequence-flow.json     # 入口切换到 aiban-runtime
+└── test/phase2-closed-loop.test.js      # 移除旧 ZMQ/Inbox 输入假设
+```
+
+同时更新：
+
+- `README.md` 当前阶段与启动说明。
+- `docs/WORKFLOW_1_0_PARITY_MATRIX.md` 阶段二相关状态。
+- `docs/LEGACY_ZMQ_MIGRATION.md` 阶段一验收后的旧代码处置策略。
+- MySQL schema 或唯一键说明，确保 `result_event_id` 幂等。
+
 ---
 
 ## 12. Git 与实施规则
@@ -574,7 +616,7 @@ docs/
 3. 每次只完成一个可验证任务。
 4. 协议、生命周期和异常分支必须先有测试。
 5. 每完成一个任务，记录修改文件、验证命令、测试结果和已知风险。
-6. 新阶段一验收前，不删除旧架构代码。
+6. 阶段二验收前不删除旧架构主链路代码；可先清理阶段一验收后明确无用的测试产物。
 7. 未完成全量功能对等前，保留 1.0 回退能力。
 
 建议提交顺序：
@@ -593,16 +635,16 @@ docs(runtime): add phase 1 test report and operations
 
 ## 13. 当前立即执行顺序
 
-1. 评审并冻结本计划。
-2. 建立旧 ZMQ 代码迁移清单。
-3. 定义 `AIBAN_RUNTIME_PROTOCOL.md`。
-4. 使用 Mock SDK 实现 Python Runner。
-5. 实现 `aiban-runtime` Node-RED 组件。
-6. 完成 `aiban-runtime → Debug` 模拟帧闭环。
-7. 接入真实 AiBan SDK。
-8. 完成生命周期、异常、背压和 Windows 进程回收测试。
-9. 输出新阶段一测试报告。
-10. 阶段一验收后，再调整并继续阶段二组件。
+1. 冻结 `docs/PHASE2_MESSAGE_CONTRACT.md` 作为阶段二输入/输出契约。
+2. 更新 A-B-C 示例 flow，入口切换到 `aiban-runtime` 第一输出端口。
+3. 复核 `aiban-label` 输入读取逻辑，改为扫描 `msg.payload.models[*].boxes[*]`。
+4. 复核 `aiban-result` 拓扑发现、状态隔离、TIMEOUT/NG/跳步逻辑。
+5. 复核 `aiban-result-db` 幂等键，统一使用 `abc_result.result_event_id`。
+6. 迁移或重写 `phase2-closed-loop.test.js`，移除旧 ZMQ/Inbox 断言。
+7. 使用 Mock SDK 完成 `runtime → label A/B/C → result → result-db` 闭环。
+8. 使用真实 SDK 完成 A-B-C 闭环和 MySQL 写库验证。
+9. 输出 `docs/TEST_REPORT_V2_PHASE_2.md`。
+10. 阶段二验收后，再评审删除 `core/frame_bridge/` 的范围。
 
 ---
 
