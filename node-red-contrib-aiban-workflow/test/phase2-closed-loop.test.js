@@ -40,27 +40,43 @@ function makeFrame(overrides = {}) {
         session_id: "test-session",
         group_id: 1,
         source_id: 1,
-        frame_seq: 100,
-        message_id: "msg-100",
+        event_seq: 100,
+        event_id: "evt-100",
         label_matches: [],
         ...overrides,
     };
     return {
         payload: {
-            message_id: d.message_id,
+            // New field names (primary)
+            event_id: d.event_id,
+            event_seq: d.event_seq,
+            // Backward compat
+            event_id: d.event_id,
+            event_seq: d.event_seq,
+            // Identity
             session_id: d.session_id,
             stream_id: `group-${d.group_id}/source-${d.source_id}`,
-            frame_seq: d.frame_seq,
             group_id: d.group_id,
             source_id: d.source_id,
+            // Models (new format from aiban-runtime)
+            models: {},
+            // Legacy (no longer populated by aiban-runtime, kept for compat)
             labels: [],
             label_summary: "",
         },
         aiban: {
-            message_id: d.message_id,
+            // New field names (primary)
+            event_id: d.event_id,
+            event_seq: d.event_seq,
+            // Backward compat
+            event_id: d.event_id,
+            event_seq: d.event_seq,
+            // Identity
             session_id: d.session_id,
             stream_id: `group-${d.group_id}/source-${d.source_id}`,
-            frame_seq: d.frame_seq,
+            group_id: d.group_id,
+            source_id: d.source_id,
+            // Label matches from aiban-label nodes
             label_matches: d.label_matches,
         },
         workflow: { workflow_id: "abc-demo" },
@@ -167,7 +183,7 @@ describe("Scenario 1: A→B→C → OK", () => {
         const key = makeStateKey("abc-demo", "test-session", 1, 1);
 
         let events = runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
         assert.equal(events.length, 1);
@@ -176,7 +192,7 @@ describe("Scenario 1: A→B→C → OK", () => {
         assert.equal(store.getState(key).step_index, 1);
 
         events = runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["B"], ABC_TOPOLOGY),
         }), 1100);
         assert.equal(events.length, 1);
@@ -184,7 +200,7 @@ describe("Scenario 1: A→B→C → OK", () => {
         assert.equal(store.getState(key).step_index, 2);
 
         events = runtime.process(makeFrame({
-            frame_seq: 102, message_id: "msg-102",
+            event_seq: 102, event_id: "msg-102",
             label_matches: makeLabelMatches(["C"], ABC_TOPOLOGY),
         }), 1200);
         assert.equal(events.length, 1);
@@ -210,20 +226,20 @@ describe("Scenario 2: B first → NG", () => {
 
         // B first — ignored (IDLE expects A)
         let events = runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["B"], ABC_TOPOLOGY),
         }), 1000);
         assert.equal(events.length, 0, "B ignored at IDLE");
 
         // A starts cycle
         runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 2000);
 
         // C before B → NG
         events = runtime.process(makeFrame({
-            frame_seq: 102, message_id: "msg-102",
+            event_seq: 102, event_id: "msg-102",
             label_matches: makeLabelMatches(["C"], ABC_TOPOLOGY),
         }), 3000);
         assert.equal(events[0].type, "terminal");
@@ -245,12 +261,12 @@ describe("Scenario 3: A→C skip B → NG", () => {
     test("skipping B produces NG with clear reason", () => {
         const { runtime } = ctx;
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
 
         const events = runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["C"], ABC_TOPOLOGY),
         }), 2000);
         assert.equal(events[0].type, "terminal");
@@ -273,19 +289,19 @@ describe("Scenario 4: Timeout → TIMEOUT", () => {
 
         // Start cycle
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
 
         // B arrives quickly (100ms later)
         runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["B"], ABC_TOPOLOGY),
         }), 1100);
 
         // Next frame arrives well after timeout (500ms later = 600ms elapsed > 300ms timeout)
         const events = runtime.process(makeFrame({
-            frame_seq: 102, message_id: "msg-102",
+            event_seq: 102, event_id: "msg-102",
             label_matches: makeLabelMatches([], ABC_TOPOLOGY),
         }), 1700);
         assert.equal(events.length, 1, "Should get 1 TIMEOUT event");
@@ -307,12 +323,12 @@ describe("Scenario 5: Same label repeat → NG", () => {
     test("A again in WAIT_B produces NG", () => {
         const { runtime } = ctx;
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
 
         const events = runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1100);
         assert.equal(events[0].type, "terminal");
@@ -334,7 +350,7 @@ describe("Scenario 6: message_id replay dedup", () => {
     test("replay does not duplicate", () => {
         const { runtime } = ctx;
         const frame = makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         });
         let events = runtime.process(frame, 1000);
@@ -357,11 +373,11 @@ describe("Scenario 7: Source isolation", () => {
     test("two sources progress independently", () => {
         const { runtime, store } = ctx;
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-s1-100", source_id: 1,
+            event_seq: 100, event_id: "msg-s1-100", source_id: 1,
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
         runtime.process(makeFrame({
-            frame_seq: 50, message_id: "msg-s2-50", source_id: 2,
+            event_seq: 50, event_id: "msg-s2-50", source_id: 2,
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
 
@@ -386,11 +402,11 @@ describe("Scenario 8: Session isolation", () => {
     test("different sessions isolated", () => {
         const { runtime, store } = ctx;
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-s1-100", session_id: "session-1",
+            event_seq: 100, event_id: "msg-s1-100", session_id: "session-1",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-s2-100", session_id: "session-2",
+            event_seq: 100, event_id: "msg-s2-100", session_id: "session-2",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
 
@@ -466,7 +482,7 @@ describe("Scenario 11: Recovery marks expired INTERRUPTED", () => {
         const ctx = createRuntime(ABC_TOPOLOGY, { cycleTimeoutMs: 500 });
         const { runtime, store } = ctx;
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
         assert.equal(store.listActive().length, 1);
@@ -492,22 +508,22 @@ describe("Scenario 12: Audit log/JSONL/CSV completeness", () => {
             const audit = new WorkflowAuditLogger(auditDir, "test-run-001");
 
             audit.record("frame_received", {
-                message_id: "audit-msg-1", frame_seq: 100,
+                event_id: "audit-msg-1", event_seq: 100,
                 group_id: 1, source_id: 1, session_id: "s1", stream_id: "group-1/source-1",
                 label_summary: "A(0.900)",
             });
             audit.record("sequence_transition", {
                 cycle_id: "cyc-001", previous_state: "IDLE", current_state: "WAIT_B",
                 recognized_step: "A", stage_duration_ms: 0.08, workflow_id: "abc-demo",
-                message_id: "audit-msg-1", frame_seq: 100,
+                event_id: "audit-msg-1", event_seq: 100,
                 group_id: 1, source_id: 1, session_id: "s1", stream_id: "group-1/source-1",
             });
             audit.record("sequence_completed", {
                 cycle_id: "cyc-001", result_status: "OK", cycle_duration_ms: 5000,
                 actual_sequence: '["A","B","C"]', total_processing_ms: 4.25,
-                workflow_id: "abc-demo", message_id: "audit-msg-3",
+                workflow_id: "abc-demo", event_id: "audit-msg-3",
                 event_id: "abc-demo:s1:group-1/source-1:cyc-001:OK",
-                frame_seq: 102, group_id: 1, source_id: 1, session_id: "s1", stream_id: "group-1/source-1",
+                event_seq: 102, group_id: 1, source_id: 1, session_id: "s1", stream_id: "group-1/source-1",
             });
             audit.recordCycleSummary({
                 cycle_id: "cyc-001", workflow_id: "abc-demo", stream_id: "group-1/source-1",
@@ -555,13 +571,13 @@ describe("Scenario 13: Topology change A→C→B", () => {
         const { runtime } = ctx;
 
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ACB_TOPOLOGY),
         }), 1000);
 
         // B before C → NG in ACB topology
         const events = runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["B"], ACB_TOPOLOGY),
         }), 1100);
         assert.equal(events[0].type, "terminal");
@@ -576,16 +592,16 @@ describe("Scenario 13: Topology change A→C→B", () => {
         const { runtime } = ctx;
 
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ACB_TOPOLOGY),
         }), 1000);
         runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["C"], ACB_TOPOLOGY),
         }), 1100);
 
         const events = runtime.process(makeFrame({
-            frame_seq: 102, message_id: "msg-102",
+            event_seq: 102, event_id: "msg-102",
             label_matches: makeLabelMatches(["B"], ACB_TOPOLOGY),
         }), 1200);
         assert.equal(events[0].type, "terminal");
@@ -606,25 +622,25 @@ describe("Scenario 14: 4-label topology A→B→D→C", () => {
         const key = makeStateKey("abc-demo", "test-session", 1, 1);
 
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABDC_TOPOLOGY),
         }), 1000);
         assert.equal(store.getState(key).step_index, 1);
 
         runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["B"], ABDC_TOPOLOGY),
         }), 1100);
         assert.equal(store.getState(key).step_index, 2);
 
         runtime.process(makeFrame({
-            frame_seq: 102, message_id: "msg-102",
+            event_seq: 102, event_id: "msg-102",
             label_matches: makeLabelMatches(["D"], ABDC_TOPOLOGY),
         }), 1200);
         assert.equal(store.getState(key).step_index, 3);
 
         const events = runtime.process(makeFrame({
-            frame_seq: 103, message_id: "msg-103",
+            event_seq: 103, event_id: "msg-103",
             label_matches: makeLabelMatches(["C"], ABDC_TOPOLOGY),
         }), 1300);
         assert.equal(events[0].type, "terminal");
@@ -638,16 +654,16 @@ describe("Scenario 14: 4-label topology A→B→D→C", () => {
         const { runtime } = ctx;
 
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABDC_TOPOLOGY),
         }), 1000);
         runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["B"], ABDC_TOPOLOGY),
         }), 1100);
 
         const events = runtime.process(makeFrame({
-            frame_seq: 102, message_id: "msg-102",
+            event_seq: 102, event_id: "msg-102",
             label_matches: makeLabelMatches(["C"], ABDC_TOPOLOGY),
         }), 1200);
         assert.equal(events[0].result.result_status, "NG");
@@ -675,7 +691,7 @@ describe("WorkflowStateStore V2 CRUD", () => {
                 step_index: 1, total_steps: 3, cycle_id: "cyc-1",
                 cycle_started_at_ms: 1000, start_frame_seq: 100,
                 last_frame_seq: 100, last_message_id: "msg-1",
-                steps_data: JSON.stringify({ A: { frame_seq: 100, at_ms: 1000 } }),
+                steps_data: JSON.stringify({ A: { event_seq: 100, at_ms: 1000 } }),
                 actual_sequence: JSON.stringify(["A"]),
             });
 
@@ -748,12 +764,12 @@ describe("Edge: multi-label frame", () => {
         const ctx = createRuntime(ABC_TOPOLOGY);
         const { runtime } = ctx;
         runtime.process(makeFrame({
-            frame_seq: 100, message_id: "msg-100",
+            event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
 
         const events = runtime.process(makeFrame({
-            frame_seq: 101, message_id: "msg-101",
+            event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["B", "C"], ABC_TOPOLOGY),
         }), 2000);
         assert.equal(events[0].type, "terminal");

@@ -37,9 +37,11 @@ module.exports = function registerLabelNode(RED) {
             const matchStart = process.hrtime.bigint();
 
             try {
-                // Get labels from the frame (attached by frame-input-node)
+                // Scan models[*].boxes[*] from aiban-runtime frame message.
+                // The old flat labels[] array is deprecated and no longer
+                // emitted by aiban-runtime (Phase 1+).
                 const frame = msg.payload || {};
-                const labels = frame.labels || [];
+                const models = frame.models || {};
 
                 // Ensure aiban block exists
                 if (!msg.aiban) {
@@ -51,28 +53,36 @@ module.exports = function registerLabelNode(RED) {
 
                 let matched = false;
                 let matchedConfidence = null;
+                let matchedBoxIndex = -1;
+                let boxCount = 0;
 
-                // Check if any label in this frame matches our config
-                if (Array.isArray(labels) && labels.length > 0) {
-                    for (const lbl of labels) {
+                // Walk every model → boxes and check against our config
+                for (const [mId, result] of Object.entries(models)) {
+                    if (String(mId) !== modelId) continue;
+                    if (!result || !result.ok || !Array.isArray(result.boxes)) continue;
+
+                    for (let boxIdx = 0; boxIdx < result.boxes.length; boxIdx++) {
+                        boxCount++;
+                        const box = result.boxes[boxIdx];
                         if (
-                            String(lbl.model_id) === modelId &&
-                            String(lbl.label) === label &&
-                            Number(lbl.confidence) >= confidenceMin
+                            String(box.label) === label &&
+                            Number(box.confidence) >= confidenceMin
                         ) {
                             matched = true;
-                            matchedConfidence = Number(lbl.confidence);
+                            matchedConfidence = Number(box.confidence);
+                            matchedBoxIndex = boxIdx;
                             matchCount++;
                             break;
                         }
                     }
+                    if (matched) break;
                 }
 
                 const matchDurationMs = Number(
                     process.hrtime.bigint() - matchStart
                 ) / 1e6;
 
-                // Append match result
+                // Append match result (preserves format for downstream nodes)
                 msg.aiban.label_matches.push({
                     node_id: node.id,
                     label_id: labelId,
@@ -81,8 +91,40 @@ module.exports = function registerLabelNode(RED) {
                     confidence_min: confidenceMin,
                     matched: matched,
                     confidence: matched ? matchedConfidence : null,
+                    box_index: matched ? matchedBoxIndex : -1,
+                    boxes_scanned: boxCount,
                     match_duration_ms: Number(matchDurationMs.toFixed(3)),
                 });
+
+                // Also populate workflow block per Phase 2 message contract
+                if (matched) {
+                    if (!msg.workflow) {
+                        msg.workflow = {};
+                    }
+                    if (!Array.isArray(msg.workflow.matched_steps)) {
+                        msg.workflow.matched_steps = [];
+                    }
+                    if (!Array.isArray(msg.workflow.matched_labels)) {
+                        msg.workflow.matched_labels = [];
+                    }
+                    msg.workflow.matched_steps.push(labelId);
+                    msg.workflow.matched_labels.push({
+                        step_id: labelId,
+                        model_id: modelId,
+                        label: label,
+                        confidence: matchedConfidence,
+                        box_index: matchedBoxIndex,
+                    });
+                    msg.workflow.match_started_at_ms = Number(
+                        process.hrtime.bigint()
+                    ) / 1e6;
+                    msg.workflow.match_finished_at_ms = Number(
+                        process.hrtime.bigint()
+                    ) / 1e6;
+                    msg.workflow.match_duration_ms = Number(
+                        matchDurationMs.toFixed(3)
+                    );
+                }
 
                 // Update status
                 if (matched) {

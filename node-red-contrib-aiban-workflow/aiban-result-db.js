@@ -69,9 +69,13 @@ module.exports = function registerResultDbNode(RED) {
                 const workflowData = msg.workflow || {};
                 const now = beijingNowISO();
 
-                // Build the DB row from new message format
+                // Build the DB row from new message format.
+                // Primary idempotency key: result_event_id (Phase 2 contract).
+                // Falls back to event_id for backward compatibility.
+                const resultEventId = abcResult.result_event_id || abcResult.event_id || "";
                 const row = {
-                    event_id: abcResult.event_id,
+                    event_id: resultEventId,
+                    result_event_id: resultEventId,
                     cycle_id: abcResult.cycle_id,
                     workflow_id: workflowData.workflow_id || "",
                     session_id: abcResult.session_id || frame.session_id || msg.aiban?.session_id || "",
@@ -96,7 +100,8 @@ module.exports = function registerResultDbNode(RED) {
 
                 // Attach db_result to msg
                 msg.db_result = {
-                    event_id: abcResult.event_id,
+                    result_event_id: resultEventId,
+                    event_id: resultEventId,  // backward compat alias
                     status: "queued",
                     db_write_duration_ms: null,
                     attempts: 0,
@@ -118,8 +123,11 @@ module.exports = function registerResultDbNode(RED) {
                 send(msg);
             } catch (error) {
                 node.error(`result-db error: ${error.message}`, msg);
+                const fallbackEventId = msg.abc_result?.result_event_id
+                    || msg.abc_result?.event_id || "";
                 msg.db_result = {
-                    event_id: msg.abc_result?.event_id || "",
+                    result_event_id: fallbackEventId,
+                    event_id: fallbackEventId,
                     status: "failed",
                     db_write_duration_ms: null,
                     attempts: 0,

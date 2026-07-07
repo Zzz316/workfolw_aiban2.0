@@ -177,6 +177,7 @@ class TopologyCompiler {
                 // No label predecessors — check for entry point
                 const entryPreds = predecessors.filter(
                     (n) =>
+                        n.type === "aiban-runtime" ||
                         n.type === "aiban-frame-input" ||
                         n.type === "inject" ||
                         n.type === "aiban-result" // in case of chaining
@@ -198,7 +199,7 @@ class TopologyCompiler {
     _findEntry(firstLabelNodeId, reverseMap, allNodes) {
         const predecessors = reverseMap[firstLabelNodeId] || [];
         const entry = predecessors.find(
-            (n) => n.type === "aiban-frame-input" || n.type === "inject"
+            (n) => n.type === "aiban-runtime" || n.type === "aiban-frame-input" || n.type === "inject"
         );
         return entry ? entry.id : null;
     }
@@ -296,7 +297,7 @@ class FlowRuntime {
         this.stateStore = opts.stateStore;
         this.auditLogger = opts.auditLogger;
         this.workflowId = opts.workflowId || "abc-sequence-demo";
-        this.cycleTimeoutMs = Math.max(1000, Number(opts.cycleTimeoutMs) || 30000);
+        this.cycleTimeoutMs = Math.max(1, Number(opts.cycleTimeoutMs) || 30000);
         this.allowSameFrameRestart = Boolean(opts.allowSameFrameRestart);
 
         // Derived: total steps in the topology
@@ -357,11 +358,20 @@ class FlowRuntime {
         const aiban = frameMsg.aiban || {};
         const workflowData = frameMsg.workflow || {};
 
-        const sessionId = payload.session_id || aiban.session_id || "";
+        const sessionId = aiban.session_id || payload.session_id || "";
         const groupId = Number(payload.group_id ?? aiban.group_id ?? 0);
         const sourceId = Number(payload.source_id ?? aiban.source_id ?? 0);
-        const frameSeq = Number(payload.frame_seq ?? aiban.frame_seq ?? 0);
-        const messageId = payload.message_id || aiban.message_id || "";
+        // Prefer new field names (event_seq / event_id) from aiban-runtime.
+        // Fall back to legacy names (frame_seq / message_id) for backward compat.
+        const eventSeq = Number(
+            aiban.event_seq ?? payload.event_seq
+            ?? aiban.frame_seq ?? payload.frame_seq ?? 0
+        );
+        const eventId = aiban.event_id
+            || payload.event_id
+            || aiban.message_id
+            || payload.message_id
+            || "";
         const streamId = makeStreamId(groupId, sourceId);
 
         // Extract matched labels from this frame
@@ -373,15 +383,16 @@ class FlowRuntime {
             .map((m) => m.label_id || m.labelId);
 
         // Validate required fields
-        if (!sessionId || !groupId || frameSeq === undefined) {
+        if (!sessionId || !groupId || eventSeq === undefined) {
             return events;
         }
 
         const stateKey = makeStateKey(this.workflowId, sessionId, groupId, sourceId);
         let state = this.stateStore.getState(stateKey);
 
-        // ---- frame_seq dedup ----
-        if (state && state.last_frame_seq !== null && frameSeq <= state.last_frame_seq) {
+        // ---- event_seq dedup (with backward compat for frame_seq) ----
+        const slfs = state ? (state.last_event_seq ?? state.last_frame_seq) : null;
+        if (state && slfs !== null && slfs !== undefined && eventSeq <= slfs) {
             return events;
         }
 
@@ -412,13 +423,13 @@ class FlowRuntime {
                 const firstLabelId = this._expectedLabelId(0);
                 if (matchedLabelIds.includes(firstLabelId)) {
                     // message_id dedup at IDLE
-                    if (state && state.last_message_id === messageId) {
+                    if (state && state.last_message_id === eventId) {
                         return events;
                     }
                     const cycleId = randomUUID();
                     const initialStepsData = {};
                     initialStepsData[firstLabelId] = {
-                        frame_seq: frameSeq,
+                        frame_seq: eventSeq,
                         at_ms: nowMs,
                     };
                     const actualSeq = [firstLabelId];
@@ -432,9 +443,9 @@ class FlowRuntime {
                         total_steps: this.totalSteps,
                         cycle_id: cycleId,
                         cycle_started_at_ms: nowMs,
-                        start_frame_seq: frameSeq,
-                        last_frame_seq: frameSeq,
-                        last_message_id: messageId,
+                        start_frame_seq: eventSeq,
+                        last_frame_seq: eventSeq,
+                        last_message_id: eventId,
                         steps_data: JSON.stringify(initialStepsData),
                         actual_sequence: JSON.stringify(actualSeq),
                     };
@@ -472,7 +483,7 @@ class FlowRuntime {
         }
 
         // message_id dedup at current step
-        if (state.last_message_id === messageId) {
+        if (state.last_message_id === eventId) {
             return events;
         }
 
@@ -489,8 +500,8 @@ class FlowRuntime {
             // No topology labels matched — just update frame tracking
             this.stateStore.saveState(stateKey, {
                 ...state,
-                last_frame_seq: frameSeq,
-                last_message_id: messageId,
+                last_frame_seq: eventSeq,
+                last_message_id: eventId,
             });
             return events;
         }
@@ -509,7 +520,7 @@ class FlowRuntime {
 
             const stepsData = JSON.parse(state.steps_data || "{}");
             stepsData[expectedLabelId] = {
-                frame_seq: frameSeq,
+                frame_seq: eventSeq,
                 at_ms: nowMs,
             };
 
@@ -520,8 +531,8 @@ class FlowRuntime {
                 const completedState = {
                     ...state,
                     step_index: newStepIndex,
-                    last_frame_seq: frameSeq,
-                    last_message_id: messageId,
+                    last_frame_seq: eventSeq,
+                    last_message_id: eventId,
                     steps_data: JSON.stringify(stepsData),
                     actual_sequence: JSON.stringify(actualSeq),
                 };
@@ -540,8 +551,8 @@ class FlowRuntime {
                 const updatedState = {
                     ...state,
                     step_index: newStepIndex,
-                    last_frame_seq: frameSeq,
-                    last_message_id: messageId,
+                    last_frame_seq: eventSeq,
+                    last_message_id: eventId,
                     steps_data: JSON.stringify(stepsData),
                     actual_sequence: JSON.stringify(actualSeq),
                 };
@@ -630,6 +641,10 @@ class FlowRuntime {
             ? this._expectedLabelId(state.step_index)
             : null;
 
+        const resultEventId = makeEventId(
+            this.workflowId, state.session_id, streamId,
+            state.cycle_id, status
+        );
         return {
             cycle_id: state.cycle_id,
             previous_state: this._stateName(state.step_index),
@@ -644,10 +659,10 @@ class FlowRuntime {
                 ? beijingNowISO(state.cycle_started_at_ms) : null,
             cycle_finished_at: beijingNowISO(nowMs),
             cycle_duration_ms: cycleDuration,
-            event_id: makeEventId(
-                this.workflowId, state.session_id, streamId,
-                state.cycle_id, status
-            ),
+            // Phase 2 primary idempotency key (result_event_id).
+            // event_id is kept as a read-only alias for backward compat.
+            result_event_id: resultEventId,
+            event_id: resultEventId,
             stage_duration_ms: 0,
             actual_sequence: state.actual_sequence,
             session_id: state.session_id,
@@ -665,6 +680,10 @@ class FlowRuntime {
      */
     buildTransitionResult(state, labelId, previousStepIndex, stageDurationMs) {
         const streamId = makeStreamId(state.group_id, state.source_id);
+        const resultEventId = makeEventId(
+            this.workflowId, state.session_id, streamId,
+            state.cycle_id, "TRANSITION"
+        );
         return {
             cycle_id: state.cycle_id,
             previous_state: this._previousStateName(state.step_index),
@@ -677,10 +696,8 @@ class FlowRuntime {
                 ? beijingNowISO(state.cycle_started_at_ms) : null,
             cycle_finished_at: null,
             cycle_duration_ms: null,
-            event_id: makeEventId(
-                this.workflowId, state.session_id, streamId,
-                state.cycle_id, "TRANSITION"
-            ),
+            result_event_id: resultEventId,
+            event_id: resultEventId,
             stage_duration_ms: Number(stageDurationMs.toFixed(3)),
             actual_sequence: state.actual_sequence,
             session_id: state.session_id,

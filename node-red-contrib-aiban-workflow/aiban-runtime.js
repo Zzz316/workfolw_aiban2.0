@@ -749,6 +749,8 @@ module.exports = function registerAibanRuntimeNode(RED) {
                     event_id: event.event_id,
                     event_seq: eventSeq,
                     stream_id: streamId,
+                    group_id: payload.group_id,
+                    source_id: payload.source_id,
                     captured_at: payload.captured_at,
                 },
             },

@@ -1,7 +1,7 @@
 "use strict";
 
 const path = require("node:path");
-const { TopologyCompiler, FlowRuntime, makeStreamId } = require("./lib/flow-runtime");
+const { TopologyCompiler, FlowRuntime, makeStreamId, makeEventId } = require("./lib/flow-runtime");
 const { WorkflowStateStore } = require("./lib/workflow-state-store");
 const { WorkflowAuditLogger, beijingNowISO } = require("./lib/workflow-audit");
 
@@ -215,26 +215,33 @@ module.exports = function registerResultNode(RED) {
         }
 
         function _makeResultMessage(state, result) {
-            const streamId = _makeStreamId(state.group_id, state.source_id);
-            result.event_id = _makeEventId(
+            const streamId = makeStreamId(state.group_id, state.source_id);
+            // Primary idempotency key: result_event_id (Phase 2 contract)
+            result.result_event_id = makeEventId(
                 workflowId, state.session_id, streamId,
                 result.cycle_id, result.result_status
             );
+            // Keep event_id as read-only alias for backward compat
+            result.event_id = result.result_event_id;
             return {
-                _msgid: result.event_id,
+                _msgid: result.result_event_id,
                 topic: streamId,
                 payload: {
-                    message_id: state.last_message_id || "",
+                    event_id: result.result_event_id,
+                    message_id: state.last_message_id || state.last_event_id || "",
                     session_id: state.session_id,
                     stream_id: streamId,
+                    event_seq: state.last_event_seq ?? state.last_frame_seq,
                     frame_seq: state.last_frame_seq,
                     group_id: state.group_id,
                     source_id: state.source_id,
                 },
                 aiban: {
-                    message_id: state.last_message_id || "",
+                    event_id: result.result_event_id,
+                    message_id: state.last_message_id || state.last_event_id || "",
                     session_id: state.session_id,
                     stream_id: streamId,
+                    event_seq: state.last_event_seq ?? state.last_frame_seq,
                     frame_seq: state.last_frame_seq,
                 },
                 workflow: {
@@ -247,7 +254,8 @@ module.exports = function registerResultNode(RED) {
         }
 
         function _auditFields(state, result, eventType) {
-            const streamId = _makeStreamId(state.group_id, state.source_id);
+            const streamId = makeStreamId(state.group_id, state.source_id);
+            const resultEventId = result.result_event_id || result.event_id || "";
             return {
                 cycle_id: result.cycle_id,
                 result_status: result.result_status,
@@ -256,8 +264,10 @@ module.exports = function registerResultNode(RED) {
                 cycle_duration_ms: result.cycle_duration_ms,
                 total_processing_ms: result.stage_duration_ms || 0,
                 workflow_id: workflowId,
-                message_id: state.last_message_id || "",
-                event_id: result.event_id,
+                event_id: resultEventId,
+                result_event_id: resultEventId,
+                message_id: state.last_message_id || state.last_event_id || "",
+                event_seq: state.last_event_seq ?? state.last_frame_seq ?? 0,
                 frame_seq: state.last_frame_seq ?? 0,
                 group_id: state.group_id,
                 source_id: state.source_id,
@@ -314,31 +324,43 @@ module.exports = function registerResultNode(RED) {
             const transStart = process.hrtime.bigint();
 
             try {
-                // Extract key fields for audit
+                // Extract key fields for audit — prefer new field names
+                // (event_id / event_seq) from aiban-runtime, falling back
+                // to legacy names (message_id / frame_seq) for backward
+                // compatibility with old frame-input-node.
                 const payload = msg.payload || {};
                 const aiban = msg.aiban || {};
-                const sessionId = payload.session_id || aiban.session_id || "";
+                const sessionId = aiban.session_id || payload.session_id || "";
                 const groupId = Number(payload.group_id ?? aiban.group_id ?? 0);
                 const sourceId = Number(payload.source_id ?? aiban.source_id ?? 0);
-                const frameSeq = Number(payload.frame_seq ?? aiban.frame_seq ?? 0);
-                const messageId = payload.message_id || aiban.message_id || "";
-                const streamId = _makeStreamId(groupId, sourceId);
+                const eventSeq = Number(
+                    aiban.event_seq ?? payload.event_seq
+                    ?? aiban.frame_seq ?? payload.frame_seq ?? 0
+                );
+                const eventId = aiban.event_id
+                    || payload.event_id
+                    || aiban.message_id
+                    || payload.message_id
+                    || "";
+                const streamId = makeStreamId(groupId, sourceId);
 
-                if (!sessionId || !groupId || frameSeq === undefined) {
-                    node.warn("[aiban-result] 帧缺少必要字段 (session_id/group_id/frame_seq), 跳过");
+                if (!sessionId || !groupId || eventSeq === undefined) {
+                    node.warn("[aiban-result] 帧缺少必要字段 (session_id/group_id/event_seq), 跳过");
                     if (done) done();
                     return;
                 }
 
                 // Audit: frame_received
                 auditLogger.record("frame_received", {
-                    message_id: messageId,
-                    frame_seq: frameSeq,
+                    event_id: eventId,
+                    message_id: eventId,  // backward compat
+                    event_seq: eventSeq,
+                    frame_seq: eventSeq,  // backward compat
                     group_id: groupId,
                     source_id: sourceId,
                     session_id: sessionId,
                     stream_id: streamId,
-                    label_summary: payload.label_summary || "",
+                    label_summary: "",
                 });
 
                 // Audit label matches from this frame
@@ -346,8 +368,10 @@ module.exports = function registerResultNode(RED) {
                 const matchedInFrame = labelMatches.filter((m) => m.matched === true);
                 if (matchedInFrame.length > 0) {
                     auditLogger.record("label_match_finished", {
-                        message_id: messageId,
-                        frame_seq: frameSeq,
+                        event_id: eventId,
+                        message_id: eventId,
+                        event_seq: eventSeq,
+                        frame_seq: eventSeq,
                         group_id: groupId,
                         source_id: sourceId,
                         session_id: sessionId,

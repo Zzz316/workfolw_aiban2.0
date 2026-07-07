@@ -4,22 +4,33 @@
         "type": "tab",
         "label": "Phase 2: A-B-C 拓扑驱动顺序检测",
         "disabled": false,
-        "info": "拓扑驱动最小闭环: aiban-frame-input → aiban-label (A) → aiban-label (B) → aiban-label (C) → aiban-result → aiban-result-db\n\n验证要点:\n- A/B/C 是三个独立可拖放的 aiban-label 组件\n- 顺序由画布连线拓扑表达，不在任何组件中配置 steps 数组\n- 改变连线 (如 A→C→B) 即可改变期望顺序\n- aiban-result 自动从连线发现拓扑并管理状态机"
+        "info": "拓扑驱动最小闭环: aiban-runtime → aiban-label (A) → aiban-label (B) → aiban-label (C) → aiban-result → aiban-result-db\n\n验证要点:\n- A/B/C 是三个独立可拖放的 aiban-label 组件\n- 顺序由画布连线拓扑表达，不在任何组件中配置 steps 数组\n- 改变连线 (如 A→C→B) 即可改变期望顺序\n- aiban-result 自动从连线发现拓扑并管理状态机\n- 入口节点为 aiban-runtime (非 aiban-frame-input/ZMQ)"
     },
     {
-        "id": "frame-input-abc",
-        "type": "aiban-frame-input",
+        "id": "runtime-abc",
+        "type": "aiban-runtime",
         "z": "phase2-abc-tab",
-        "name": "帧输入 (Phase 1)",
-        "endpoint": "tcp://127.0.0.1:5557",
-        "inboxPath": "data/frame_bridge/inbox.db",
-        "showLatency": true,
-        "logEvery": "10",
+        "name": "AiBan 运行时",
+        "pythonPath": "",
+        "runnerPath": "",
+        "sdkHome": "",
+        "pipelineConfig": "",
+        "workingDirectory": "",
+        "useMock": true,
+        "startupTimeoutMs": "30000",
+        "shutdownTimeoutMs": "10000",
+        "heartbeatIntervalMs": "5000",
+        "heartbeatTimeoutMs": "15000",
+        "restartPolicy": "never",
+        "maxRestartCount": "3",
+        "restartBackoffMs": "5000",
+        "autoStart": false,
         "x": 130,
         "y": 200,
         "wires": [
             ["label-a"],
-            ["debug-screenshot-abc"]
+            [],
+            []
         ]
     },
     {
@@ -106,23 +117,6 @@
         "wires": []
     },
     {
-        "id": "debug-screenshot-abc",
-        "type": "debug",
-        "z": "phase2-abc-tab",
-        "name": "截图结果",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "payload",
-        "targetType": "msg",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 310,
-        "y": 280,
-        "wires": []
-    },
-    {
         "id": "inject-test-a",
         "type": "inject",
         "z": "phase2-abc-tab",
@@ -130,7 +124,12 @@
         "props": [
             {
                 "p": "payload",
-                "v": "{\"type\":\"frame\",\"schema_version\":1,\"message_id\":\"test-a-1\",\"session_id\":\"test-session\",\"stream_id\":\"group-1/source-1\",\"frame_seq\":100,\"group_id\":1,\"source_id\":1,\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"A\",\"label_index\":0,\"confidence\":0.9}]}},\"labels\":[{\"model_id\":\"1\",\"label\":\"A\",\"confidence\":0.9}],\"label_summary\":\"m1:A(0.900)\"}",
+                "v": "{\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"A\",\"label_index\":0,\"confidence\":0.9,\"polygon\":[],\"mask_contours\":[],\"tracker_id\":1,\"sub_models\":{}}]}},\"group_id\":1,\"source_id\":1,\"stream_id\":\"group-1/source-1\"}",
+                "vt": "json"
+            },
+            {
+                "p": "aiban",
+                "v": "{\"runtime_id\":\"test\",\"session_id\":\"test-session\",\"event_id\":\"evt-a-1\",\"event_seq\":100,\"stream_id\":\"group-1/source-1\",\"group_id\":1,\"source_id\":1}",
                 "vt": "json"
             }
         ],
@@ -141,7 +140,7 @@
         "topic": "",
         "x": 130,
         "y": 120,
-        "wires": [["frame-input-abc"]]
+        "wires": [["label-a"]]
     },
     {
         "id": "inject-test-b",
@@ -151,7 +150,12 @@
         "props": [
             {
                 "p": "payload",
-                "v": "{\"type\":\"frame\",\"schema_version\":1,\"message_id\":\"test-b-1\",\"session_id\":\"test-session\",\"stream_id\":\"group-1/source-1\",\"frame_seq\":101,\"group_id\":1,\"source_id\":1,\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"B\",\"label_index\":0,\"confidence\":0.9}]}},\"labels\":[{\"model_id\":\"1\",\"label\":\"B\",\"confidence\":0.9}],\"label_summary\":\"m1:B(0.900)\"}",
+                "v": "{\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"B\",\"label_index\":0,\"confidence\":0.9,\"polygon\":[],\"mask_contours\":[],\"tracker_id\":2,\"sub_models\":{}}]}},\"group_id\":1,\"source_id\":1,\"stream_id\":\"group-1/source-1\"}",
+                "vt": "json"
+            },
+            {
+                "p": "aiban",
+                "v": "{\"runtime_id\":\"test\",\"session_id\":\"test-session\",\"event_id\":\"evt-b-1\",\"event_seq\":101,\"stream_id\":\"group-1/source-1\",\"group_id\":1,\"source_id\":1}",
                 "vt": "json"
             }
         ],
@@ -162,7 +166,7 @@
         "topic": "",
         "x": 130,
         "y": 160,
-        "wires": [["frame-input-abc"]]
+        "wires": [["label-a"]]
     },
     {
         "id": "inject-test-c",
@@ -172,7 +176,12 @@
         "props": [
             {
                 "p": "payload",
-                "v": "{\"type\":\"frame\",\"schema_version\":1,\"message_id\":\"test-c-1\",\"session_id\":\"test-session\",\"stream_id\":\"group-1/source-1\",\"frame_seq\":102,\"group_id\":1,\"source_id\":1,\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"C\",\"label_index\":0,\"confidence\":0.9}]}},\"labels\":[{\"model_id\":\"1\",\"label\":\"C\",\"confidence\":0.9}],\"label_summary\":\"m1:C(0.900)\"}",
+                "v": "{\"models\":{\"1\":{\"ok\":true,\"boxes\":[{\"label\":\"C\",\"label_index\":0,\"confidence\":0.9,\"polygon\":[],\"mask_contours\":[],\"tracker_id\":3,\"sub_models\":{}}]}},\"group_id\":1,\"source_id\":1,\"stream_id\":\"group-1/source-1\"}",
+                "vt": "json"
+            },
+            {
+                "p": "aiban",
+                "v": "{\"runtime_id\":\"test\",\"session_id\":\"test-session\",\"event_id\":\"evt-c-1\",\"event_seq\":102,\"stream_id\":\"group-1/source-1\",\"group_id\":1,\"source_id\":1}",
                 "vt": "json"
             }
         ],
@@ -183,6 +192,6 @@
         "topic": "",
         "x": 130,
         "y": 240,
-        "wires": [["frame-input-abc"]]
+        "wires": [["label-a"]]
     }
 ]
