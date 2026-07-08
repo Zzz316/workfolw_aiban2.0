@@ -8,6 +8,9 @@
             model_id: { value: "1" },
             label: { value: "" },
             confidence: { value: 0.5 },
+            frame_count: { value: 1 },
+            is_end: { value: false },
+            alarm_name: { value: "" },
         },
         inputs: 1,
         outputs: 1,
@@ -16,15 +19,276 @@
         label: function () {
             const lid = this.label_id || "";
             const lbl = this.label || "";
-            if (lid && lbl) return "标签 " + lid + ": " + lbl;
-            if (lid) return "标签 " + lid;
+            const end = this.is_end ? " 🏁" : "";
+            if (lid && lbl) return "标签 " + lid + ": " + lbl + end;
+            if (lid) return "标签 " + lid + end;
             return this.name || "aiban label";
         },
         oneditprepare: function () {
+            const node = this;
+            const modelInput = $("#node-input-model_id");
+            const labelInput = $("#node-input-label");
+            const modelSelect = $("#aiban-label-model-select");
+            const labelSelect = $("#aiban-label-label-select");
+            const status = $("#aiban-label-yaml-status");
+            let loadedModels = [];
+
+            function wiresTo(candidate, targetId) {
+                return (candidate.wires || []).some(function (group) {
+                    return Array.isArray(group) && group.indexOf(targetId) !== -1;
+                });
+            }
+
+            function findUpstreamRuntime(startId) {
+                const queue = [startId];
+                const seen = {};
+                while (queue.length) {
+                    const currentId = queue.shift();
+                    if (seen[currentId]) continue;
+                    seen[currentId] = true;
+
+                    const parents = [];
+                    if (RED.nodes && typeof RED.nodes.eachNode === "function") {
+                        RED.nodes.eachNode(function (candidate) {
+                            if (wiresTo(candidate, currentId)) parents.push(candidate);
+                        });
+                    }
+
+                    for (let i = 0; i < parents.length; i++) {
+                        if (parents[i].type === "aiban-runtime") return parents[i];
+                        queue.push(parents[i].id);
+                    }
+                }
+                return null;
+            }
+
+            function findRuntimeOnTab() {
+                let runtime = null;
+                if (RED.nodes && typeof RED.nodes.eachNode === "function") {
+                    RED.nodes.eachNode(function (candidate) {
+                        if (!runtime && candidate.type === "aiban-runtime" && candidate.z === node.z) {
+                            runtime = candidate;
+                        }
+                    });
+                }
+                return runtime;
+            }
+
+            function setSelectOptions(select, options, selectedValue, emptyText) {
+                select.empty();
+                select.append($("<option></option>").attr("value", "").text(emptyText));
+                options.forEach(function (opt) {
+                    select.append($("<option></option>").attr("value", opt.value).text(opt.text));
+                });
+                if (selectedValue && !options.some(function (opt) { return opt.value === selectedValue; })) {
+                    select.append(
+                        $("<option></option>")
+                            .attr("value", selectedValue)
+                            .text(selectedValue + " (manual)")
+                    );
+                }
+                select.val(selectedValue || "");
+            }
+
+            function selectedModel() {
+                const modelId = modelInput.val();
+                return loadedModels.find(function (model) {
+                    return model.model_id === modelId;
+                }) || null;
+            }
+
+            function refreshLabelSelect() {
+                const model = selectedModel();
+                const labels = model && Array.isArray(model.labels) ? model.labels : [];
+                setSelectOptions(
+                    labelSelect,
+                    labels.map(function (label) {
+                        const suffix = label.sign !== undefined && label.sign !== null
+                            ? " [" + label.sign + "]"
+                            : "";
+                        return { value: label.name, text: label.name + suffix };
+                    }),
+                    labelInput.val(),
+                    labels.length ? "Select label..." : "No labels found"
+                );
+            }
+
+            function populateFromPipeline(data) {
+                loadedModels = Array.isArray(data.models) ? data.models : [];
+                const currentModelId = modelInput.val();
+                const hasCurrentModel = loadedModels.some(function (model) {
+                    return model.model_id === currentModelId;
+                });
+                if (
+                    loadedModels.length === 1
+                    && !hasCurrentModel
+                    && (!currentModelId || currentModelId === "1")
+                ) {
+                    modelInput.val(loadedModels[0].model_id);
+                }
+                setSelectOptions(
+                    modelSelect,
+                    loadedModels.map(function (model) {
+                        const labelCount = Array.isArray(model.labels) ? model.labels.length : 0;
+                        const name = model.model_name ? " - " + model.model_name : "";
+                        return {
+                            value: model.model_id,
+                            text: "model " + model.model_id + name + " (" + labelCount + " labels)",
+                        };
+                    }),
+                    modelInput.val(),
+                    "Select model..."
+                );
+                refreshLabelSelect();
+
+                const warnings = loadedModels
+                    .filter(function (model) { return model.warning; })
+                    .map(function (model) { return "model " + model.model_id + ": " + model.warning; });
+                status.text(
+                    "Loaded from " + (data.pipeline_config || "pipeline")
+                    + (warnings.length ? " | " + warnings.join("; ") : "")
+                );
+            }
+
+            function loadPipelineLabels() {
+                const runtime = findUpstreamRuntime(node.id) || findRuntimeOnTab();
+                if (!runtime) {
+                    status.text("No aiban-runtime found. Manual input is still available.");
+                    return;
+                }
+
+                const pipelineConfig = runtime.pipelineConfig || "";
+                status.text("Loading labels from " + (pipelineConfig || "default pipeline") + "...");
+                $.getJSON("/aiban-runtime/pipeline-labels", { path: pipelineConfig })
+                    .done(populateFromPipeline)
+                    .fail(function (xhr) {
+                        const err = xhr.responseJSON && xhr.responseJSON.error
+                            ? xhr.responseJSON.error
+                            : xhr.statusText;
+                        status.text("Could not load pipeline labels: " + err);
+                    });
+            }
+
             // Initialize label_id from name if empty
             if (!this.label_id && this.name) {
                 $("#node-input-label_id").val(this.name);
             }
+
+            // ---- Alarm name dropdown from icam_alarmname_data ----
+            const alarmInput = $("#node-input-alarm_name");
+            const alarmSelect = $("#aiban-label-alarm-select");
+            let loadedAlarmNames = [];
+            let alarmNamesError = null;
+
+            function refreshAlarmSelect(filterText) {
+                try {
+                    alarmSelect.empty();
+                    const ft = (filterText || "").toLowerCase();
+                    const filtered = ft
+                        ? loadedAlarmNames.filter(function (a) {
+                            return a.alarmname.toLowerCase().indexOf(ft) >= 0;
+                        })
+                        : loadedAlarmNames;
+                    if (alarmNamesError) {
+                        alarmSelect.append(
+                            $("<option></option>").attr("value", "").text("数据库错误: " + alarmNamesError)
+                        );
+                    } else if (filtered.length === 0 && loadedAlarmNames.length > 0) {
+                        alarmSelect.append(
+                            $("<option></option>").attr("value", "").text("无匹配 — 将使用手动输入")
+                        );
+                    } else if (loadedAlarmNames.length === 0 && !alarmNamesError) {
+                        alarmSelect.append(
+                            $("<option></option>").attr("value", "").text("无法连接数据库 — 请手动输入")
+                        );
+                    } else {
+                        alarmSelect.append(
+                            $("<option></option>").attr("value", "").text("选择报警名称...")
+                        );
+                    }
+                    filtered.forEach(function (a) {
+                        alarmSelect.append(
+                            $("<option></option>").attr("value", a.alarmname).text(a.alarmname)
+                        );
+                    });
+                    // Keep manual value if it doesn't match any DB entry
+                    const currentVal = alarmInput.val();
+                    if (currentVal && !filtered.some(function (a) { return a.alarmname === currentVal; })) {
+                        alarmSelect.append(
+                            $("<option></option>")
+                                .attr("value", currentVal)
+                                .text(currentVal + " (手动)")
+                        );
+                    }
+                    alarmSelect.val(alarmInput.val() || "");
+                } catch (e) {
+                    // Silently ignore errors in alarm select refresh
+                }
+            }
+
+            function loadAlarmNames() {
+                try {
+                    alarmSelect.empty().append(
+                        $("<option></option>").attr("value", "").text("加载中...")
+                    );
+                    $.getJSON("/aiban-alarm-names")
+                        .done(function (resp) {
+                            try {
+                                if (resp && resp.success && Array.isArray(resp.data)) {
+                                    loadedAlarmNames = resp.data;
+                                    alarmNamesError = null;
+                                } else {
+                                    loadedAlarmNames = [];
+                                    alarmNamesError = (resp && resp.error) || "未知错误";
+                                }
+                                refreshAlarmSelect();
+                            } catch (e) {
+                                loadedAlarmNames = [];
+                                alarmNamesError = null;
+                                refreshAlarmSelect();
+                            }
+                        })
+                        .fail(function (xhr) {
+                            loadedAlarmNames = [];
+                            alarmNamesError = "请求失败 (HTTP " + (xhr ? xhr.status : "?") + ")";
+                            refreshAlarmSelect();
+                        });
+                } catch (e) {
+                    // If alarm name loading fails entirely, just leave the manual input working
+                }
+            }
+
+            try {
+                alarmSelect.on("change", function () {
+                    const value = alarmSelect.val();
+                    if (value) alarmInput.val(value);
+                });
+                alarmInput.on("change keyup", function () {
+                    const val = alarmInput.val();
+                    refreshAlarmSelect(val);
+                    alarmSelect.val(val || "");
+                });
+                loadAlarmNames();
+            } catch (e) {
+                // Alarm name feature unavailable — label selection still works
+            }
+
+            modelSelect.on("change", function () {
+                const value = modelSelect.val();
+                if (value) modelInput.val(value);
+                refreshLabelSelect();
+            });
+            labelSelect.on("change", function () {
+                const value = labelSelect.val();
+                if (value) labelInput.val(value);
+            });
+            modelInput.on("change keyup", refreshLabelSelect);
+            labelInput.on("change keyup", function () {
+                labelSelect.val(labelInput.val());
+            });
+            $("#aiban-label-reload-yaml").on("click", loadPipelineLabels);
+
+            loadPipelineLabels();
         },
     });
 </script>
@@ -44,14 +308,52 @@
         <input type="text" id="node-input-model_id" placeholder="1">
     </div>
     <div class="form-row">
+        <label for="aiban-label-model-select"><i class="fa fa-list"></i> Model List</label>
+        <select id="aiban-label-model-select" style="width:70%;"></select>
+    </div>
+    <div class="form-row">
         <label for="node-input-label"><i class="fa fa-font"></i> Label</label>
         <input type="text" id="node-input-label" placeholder="A">
         <span class="form-tip">与 SDK 检测框的 label 字段精确匹配。</span>
     </div>
     <div class="form-row">
+        <label for="aiban-label-label-select"><i class="fa fa-list"></i> Label List</label>
+        <select id="aiban-label-label-select" style="width:70%;"></select>
+    </div>
+    <div class="form-row">
+        <label>&nbsp;</label>
+        <button type="button" id="aiban-label-reload-yaml" class="red-ui-button">Reload YAML labels</button>
+        <span id="aiban-label-yaml-status" style="margin-left:8px;color:#777;font-size:0.9em;"></span>
+    </div>
+    <hr>
+    <h4><i class="fa fa-bell"></i> 报警名称 (缺失时触发)</h4>
+    <div class="form-row">
+        <label for="node-input-alarm_name"><i class="fa fa-exclamation-triangle"></i> 报警名称</label>
+        <input type="text" id="node-input-alarm_name" placeholder="如:未戴安全帽">
+        <span class="form-tip">此步骤缺失时写入的报警名称，需与 icam_alarmname_data.alarmname 对应。</span>
+    </div>
+    <div class="form-row">
+        <label for="aiban-label-alarm-select"><i class="fa fa-database"></i> 从数据库选择</label>
+        <select id="aiban-label-alarm-select" style="width:70%;">
+            <option value="">加载中...</option>
+        </select>
+    </div>
+    <div class="form-row">
         <label for="node-input-confidence"><i class="fa fa-percent"></i> Confidence</label>
         <input type="text" id="node-input-confidence" placeholder="0.5">
         <span class="form-tip">最低置信度 (0 到 1)。标签 confidence >= 此值时判定为命中。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-frame_count"><i class="fa fa-hashtag"></i> 识别帧数</label>
+        <input type="text" id="node-input-frame_count" placeholder="1">
+        <span class="form-tip">累计匹配帧数达到此值后判定为命中 (默认 1，即匹配即命中)。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-is_end">
+            <input type="checkbox" id="node-input-is_end" style="width: auto; display: inline;">
+            <i class="fa fa-flag-checkered"></i> 结束标记
+        </label>
+        <span class="form-tip">识别到此标签后结束当前周期并判定结果 (OK/NG)，然后清空状态重新开始。每个工作流最多一个结束标记。</span>
     </div>
 </script>
 
@@ -66,15 +368,20 @@
         <li><b>Model ID</b>: 要匹配的 SDK 模型 ID。</li>
         <li><b>Label</b>: 要匹配的标签名称，与 SDK 检测框的 label 字段精确匹配。</li>
         <li><b>Confidence</b>: 最低置信度阈值 (0-1)。</li>
+        <li><b>识别帧数</b>: 累计匹配帧数达到此值后才判定为命中 (默认 1)。</li>
+        <li><b>结束标记</b>: 勾选后此标签作为"结束信号"。识别到结束标签时，对当前周期做最终判定（序列标签全部匹配 → OK，否则 → NG），然后清空状态重新开始。每个工作流最多一个结束标记。</li>
     </ul>
 
     <h4>行为</h4>
     <p>此节点为<strong>透传节点</strong>——所有帧都会传递到下游，无论是否匹配。
     匹配结果追加到 <code>msg.aiban.label_matches[]</code> 数组中。</p>
+    <p>当 <b>识别帧数</b> &gt; 1 时，节点会为每个 stream (group_id/source_id) 维护累计匹配计数。
+    只有累计匹配帧数达到阈值时，<code>matched</code> 才为 <code>true</code>。
+    在此之前匹配的帧输出 <code>matched: false</code>，并在状态栏显示计数进度 (如 2/3)。</p>
 
     <h4>拓扑规则</h4>
     <p>在画布上按顺序连线即可定义识别顺序：</p>
-    <pre>[frame-input] → [标签 A] → [标签 B] → [标签 C] → [result]</pre>
+    <pre>[aiban-runtime] → [标签 A] → [标签 B] → [标签 C] → [result]</pre>
     <p>改变连线顺序 (如 A→C→B) 即可改变期望的识别顺序，无需修改任何节点配置。</p>
 
     <h4>消息契约</h4>
@@ -87,6 +394,8 @@
   "confidence_min": 0.5,
   "matched": true,
   "confidence": 0.94,
-  "match_duration_ms": 0.03
+  "match_duration_ms": 0.03,
+  "frame_count": 1,
+  "frame_count_current": 1
 }</pre>
 </script>

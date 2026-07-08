@@ -90,6 +90,16 @@ class TopologyCompiler {
             if (!l.label) {
                 errors.push(`label_id="${id}" 的节点缺少 label 配置`);
             }
+            if (l.frameCount !== undefined && (!Number.isInteger(l.frameCount) || l.frameCount < 1)) {
+                errors.push(`label_id="${id}" 的 frame_count 必须 >= 1`);
+            }
+        }
+        // Validate end label: at most one
+        const endLabels = labels.filter((l) => l.isEnd === true);
+        if (endLabels.length > 1) {
+            errors.push(
+                `发现 ${endLabels.length} 个结束标签 (${endLabels.map((l) => l.labelId || l.label_id).join(", ")})，最多只能有一个`
+            );
         }
         return { valid: errors.length === 0, errors };
     }
@@ -111,6 +121,9 @@ class TopologyCompiler {
                     model_id: n.model_id,
                     label: n.label,
                     confidence: n.confidence,
+                    frame_count: n.frame_count,
+                    is_end: n.is_end,
+                    alarm_name: n.alarm_name,
                 });
             });
         }
@@ -165,6 +178,9 @@ class TopologyCompiler {
                     modelId: String(lp.model_id || "1"),
                     label: lp.label || "",
                     confidenceMin: Number(lp.confidence) || 0.5,
+                    frameCount: Number(lp.frame_count) || 1,
+                    isEnd: lp.is_end === true || lp.is_end === "true",
+                    alarmName: lp.alarm_name || "",
                 });
                 currentId = lp.id;
             } else if (labelPreds.length > 1) {
@@ -178,14 +194,13 @@ class TopologyCompiler {
                 const entryPreds = predecessors.filter(
                     (n) =>
                         n.type === "aiban-runtime" ||
-                        n.type === "aiban-frame-input" ||
                         n.type === "inject" ||
                         n.type === "aiban-result" // in case of chaining
                 );
                 if (entryPreds.length === 0 && predecessors.length > 0) {
                     const predTypes = predecessors.map((n) => n.type).join(", ");
                     errors.push(
-                        `标签链入口必须是 aiban-frame-input 或 inject, `
+                        `标签链入口必须是 aiban-runtime 或 inject, `
                         + `实际为: ${predTypes}`
                     );
                 }
@@ -199,7 +214,7 @@ class TopologyCompiler {
     _findEntry(firstLabelNodeId, reverseMap, allNodes) {
         const predecessors = reverseMap[firstLabelNodeId] || [];
         const entry = predecessors.find(
-            (n) => n.type === "aiban-runtime" || n.type === "aiban-frame-input" || n.type === "inject"
+            (n) => n.type === "aiban-runtime" || n.type === "inject"
         );
         return entry ? entry.id : null;
     }
@@ -236,6 +251,14 @@ class TopologyCompiler {
                 errors.push(`重复的 label_id: "${label.labelId}" — 每个 aiban-label 必须使用唯一 label_id`);
             }
             seenIds.add(label.labelId);
+        }
+
+        // Validate end label: at most one, must have valid config
+        const endLabels = chain.filter((l) => l.isEnd);
+        if (endLabels.length > 1) {
+            errors.push(
+                `发现 ${endLabels.length} 个结束标签 (${endLabels.map((l) => l.labelId).join(", ")})，最多只能有一个`
+            );
         }
 
         return errors.length === 0;
@@ -300,13 +323,41 @@ class FlowRuntime {
         this.cycleTimeoutMs = Math.max(1, Number(opts.cycleTimeoutMs) || 30000);
         this.allowSameFrameRestart = Boolean(opts.allowSameFrameRestart);
 
-        // Derived: total steps in the topology
-        this.totalSteps = this.topology.length;
+        // Separate end label from sequence labels
+        const endLabels = this.topology.filter((l) => l.isEnd === true);
+        if (endLabels.length > 1) {
+            throw new Error("FlowRuntime: 最多只能有一个结束标签");
+        }
+        this.endLabel = endLabels.length === 1 ? endLabels[0] : null;
+        this.sequenceLabels = this.topology.filter((l) => !l.isEnd);
+
+        // Derived: total steps = sequence labels only (not counting end label)
+        this.totalSteps = this.sequenceLabels.length;
+
+        if (this.totalSteps === 0 && !this.endLabel) {
+            throw new Error("FlowRuntime: 至少需要一个非结束标签的序列标签");
+        }
+
+        // Per-state-key frame_count accumulator.
+        // Keyed by stateKey, stores { labelId, count } for the expected label.
+        // This ensures frame_count counts only when the flow is actually
+        // expecting a specific label — preventing premature accumulation
+        // from detections before the step is reached.
+        this._frameCountAccum = new Map();
 
         // Build a quick lookup: labelId → position in topology (0-indexed)
+        // Sequence labels get positions 0..totalSteps-1
+        // End label gets virtual position = totalSteps
         this._labelIndex = new Map();
-        for (let i = 0; i < this.topology.length; i++) {
-            this._labelIndex.set(this.topology[i].labelId, i);
+        for (let i = 0; i < this.sequenceLabels.length; i++) {
+            this._labelIndex.set(this.sequenceLabels[i].labelId, i);
+        }
+        if (this.endLabel) {
+            this._endLabelId = this.endLabel.labelId;
+            // End label has a virtual position beyond sequence labels
+            // but it can be detected at any state
+        } else {
+            this._endLabelId = null;
         }
     }
 
@@ -318,8 +369,13 @@ class FlowRuntime {
      *   otherwise → "WAIT_<nextLabelId>"
      */
     _stateName(stepIndex) {
-        if (stepIndex === 0 || stepIndex >= this.totalSteps) return "IDLE";
-        return `WAIT_${this.topology[stepIndex].labelId}`;
+        if (stepIndex === 0) return "IDLE";
+        if (stepIndex >= this.totalSteps) {
+            // All sequence labels matched — waiting for end, or completed
+            if (this.endLabel) return "WAIT_END";
+            return "IDLE";
+        }
+        return `WAIT_${this.sequenceLabels[stepIndex].labelId}`;
     }
 
     /**
@@ -328,7 +384,18 @@ class FlowRuntime {
      */
     _expectedLabelId(stepIndex) {
         if (stepIndex < 0 || stepIndex >= this.totalSteps) return null;
-        return this.topology[stepIndex].labelId;
+        return this.sequenceLabels[stepIndex].labelId;
+    }
+
+    /**
+     * Return whether a state is still considered active (not IDLE/completed).
+     */
+    _isActive(state) {
+        if (!state || state.step_index <= 0) return false;
+        if (state.step_index < this.totalSteps) return true;
+        // step_index == totalSteps: active only if end label exists (WAIT_END)
+        if (this.endLabel && state.step_index === this.totalSteps) return true;
+        return false;
     }
 
     /**
@@ -336,7 +403,8 @@ class FlowRuntime {
      */
     _previousStateName(stepIndex) {
         if (stepIndex <= 1) return "IDLE";
-        return `WAIT_${this.topology[stepIndex - 1].labelId}`;
+        if (stepIndex > this.totalSteps) return "WAIT_END";
+        return `WAIT_${this.sequenceLabels[stepIndex - 1].labelId}`;
     }
 
     /**
@@ -397,8 +465,7 @@ class FlowRuntime {
         }
 
         // ---- Timeout check on active state ----
-        if (state && state.step_index > 0 && state.step_index < this.totalSteps
-            && state.cycle_started_at_ms) {
+        if (state && this._isActive(state) && state.cycle_started_at_ms) {
             const elapsed = nowMs - state.cycle_started_at_ms;
             if (elapsed > this.cycleTimeoutMs) {
                 const result = this._buildTerminalResult(
@@ -413,19 +480,140 @@ class FlowRuntime {
                     result,
                 });
                 this.stateStore.resetState(stateKey);
+                this._frameCountAccum.delete(stateKey);
                 state = null;
             }
+        }
+
+        // ---- End label detection (at any state, including IDLE) ----
+        if (this.endLabel && matchedLabelIds.includes(this._endLabelId)) {
+            // End label detected — judge current progress and reset
+            const stepIndex = state ? state.step_index : 0;
+            const allMatched = stepIndex >= this.totalSteps;
+            const status = allMatched ? "OK" : "NG";
+            const reason = allMatched
+                ? null
+                : `提前结束: 期望完成 ${this.totalSteps} 个步骤，实际完成 ${stepIndex} 个 (${this.sequenceLabels.map((l) => l.labelId).join("→")})`;
+
+            if (state && state.step_index > 0) {
+                // Active cycle → build terminal result
+                const result = this._buildTerminalResult(state, status, reason, nowMs);
+                this.stateStore.resetState(stateKey);
+                this._frameCountAccum.delete(stateKey);
+                events.push({
+                    type: "terminal",
+                    stateKey,
+                    state: { ...state },
+                    result,
+                });
+            } else {
+                // IDLE state → create a minimal terminal result
+                const streamId = makeStreamId(groupId, sourceId);
+                const resultEventId = makeEventId(
+                    this.workflowId, sessionId, streamId,
+                    randomUUID(), status
+                );
+                // Look up the first expected step's alarm_name for NG
+                const firstExpected = this._expectedLabelId(0);
+                let idleMissingAlarmName = null;
+                if (status !== "OK" && firstExpected) {
+                    const firstDef = this.sequenceLabels.find(
+                        (l) => l.labelId === firstExpected
+                    );
+                    if (firstDef && firstDef.alarmName) {
+                        idleMissingAlarmName = firstDef.alarmName;
+                    }
+                }
+                events.push({
+                    type: "terminal",
+                    stateKey,
+                    state: {
+                        state_key: stateKey,
+                        workflow_id: this.workflowId,
+                        session_id: sessionId,
+                        group_id: groupId,
+                        source_id: sourceId,
+                        step_index: 0,
+                        total_steps: this.totalSteps,
+                        cycle_id: null,
+                        actual_sequence: "[]",
+                        start_frame_seq: eventSeq,
+                        last_frame_seq: eventSeq,
+                        last_message_id: eventId,
+                    },
+                    result: {
+                        cycle_id: null,
+                        previous_state: "IDLE",
+                        current_state: "IDLE",
+                        recognized_step: null,
+                        expected_step: firstExpected,
+                        result_status: status,
+                        failure_reason: reason || null,
+                        missing_step_alarm_name: idleMissingAlarmName,
+                        cycle_started_at: null,
+                        cycle_finished_at: beijingNowISO(nowMs),
+                        cycle_duration_ms: null,
+                        result_event_id: resultEventId,
+                        event_id: resultEventId,
+                        stage_duration_ms: 0,
+                        actual_sequence: "[]",
+                        session_id: sessionId,
+                        group_id: groupId,
+                        source_id: sourceId,
+                        stream_id: streamId,
+                        start_frame_seq: eventSeq,
+                        end_frame_seq: eventSeq,
+                        steps_data: "{}",
+                    },
+                });
+            }
+            return events;
         }
 
         // ---- IDLE: try to start a new cycle ----
         if (!state || state.step_index === 0) {
             if (matchedLabelIds.length > 0) {
                 const firstLabelId = this._expectedLabelId(0);
+                const firstDef = this.sequenceLabels[0];
+                const requiredFrames = firstDef && firstDef.frameCount ? firstDef.frameCount : 1;
                 if (matchedLabelIds.includes(firstLabelId)) {
                     // message_id dedup at IDLE
                     if (state && state.last_message_id === eventId) {
                         return events;
                     }
+                    // frame_count accumulation for first label
+                    let accumCount = 1;
+                    const accum = this._frameCountAccum.get(stateKey);
+                    if (accum && accum.labelId === firstLabelId) {
+                        accumCount = accum.count + 1;
+                    }
+                    this._frameCountAccum.set(stateKey, { labelId: firstLabelId, count: accumCount });
+                    if (accumCount < requiredFrames) {
+                        // Not enough frames yet — silently accumulate
+                        if (!state) {
+                            // Persist a minimal tracking state so the accumulator
+                            // survives across frames while still IDLE.
+                            this.stateStore.saveState(stateKey, {
+                                state_key: stateKey,
+                                workflow_id: this.workflowId,
+                                session_id: sessionId,
+                                group_id: groupId,
+                                source_id: sourceId,
+                                step_index: 0,
+                                total_steps: this.totalSteps,
+                                cycle_id: null,
+                                cycle_started_at_ms: null,
+                                start_frame_seq: eventSeq,
+                                last_frame_seq: eventSeq,
+                                last_message_id: eventId,
+                                steps_data: "{}",
+                                actual_sequence: "[]",
+                            });
+                        }
+                        return events;
+                    }
+                    // Threshold met — reset accumulator and start cycle
+                    this._frameCountAccum.delete(stateKey);
                     const cycleId = randomUUID();
                     const initialStepsData = {};
                     initialStepsData[firstLabelId] = {
@@ -458,12 +646,13 @@ class FlowRuntime {
                         previousStepIndex: 0,
                     });
 
-                    // If this was the only step (1-label topology), complete immediately
-                    if (this.totalSteps === 1) {
+                    // If this was the only step (1-label topology) and no end label, complete immediately
+                    if (this.totalSteps === 1 && !this.endLabel) {
                         const result = this._buildTerminalResult(
                             newState, "OK", null, nowMs
                         );
                         this.stateStore.resetState(stateKey);
+                this._frameCountAccum.delete(stateKey);
                         events.push({
                             type: "terminal",
                             stateKey,
@@ -477,9 +666,16 @@ class FlowRuntime {
             return events;
         }
 
-        // ---- Active state: 0 < step_index < totalSteps ----
-        if (state.step_index <= 0 || state.step_index >= this.totalSteps) {
+        // ---- Active state: 0 < step_index <= totalSteps (with end label) ----
+        if (state.step_index <= 0) {
             return events; // Shouldn't happen, but guard
+        }
+        if (state.step_index > this.totalSteps) {
+            return events;
+        }
+        // step_index == totalSteps is active only when end label exists (WAIT_END)
+        if (state.step_index === this.totalSteps && !this.endLabel) {
+            return events;
         }
 
         // message_id dedup at current step
@@ -514,7 +710,29 @@ class FlowRuntime {
         const hasRepeat = matchedPositions.some((p) => p < currentStepIndex);
 
         if (hasExpected && !hasSkip) {
-            // Correct step matched!
+            // Correct step matched — apply frame_count threshold.
+            const expectedDef = this.sequenceLabels[currentStepIndex];
+            const requiredFrames = expectedDef && expectedDef.frameCount
+                ? expectedDef.frameCount : 1;
+
+            let accumCount = 1;
+            const accum = this._frameCountAccum.get(stateKey);
+            if (accum && accum.labelId === expectedLabelId) {
+                accumCount = accum.count + 1;
+            }
+            if (accumCount < requiredFrames) {
+                // Not enough frames yet — persist accumulator, update tracking
+                this._frameCountAccum.set(stateKey, { labelId: expectedLabelId, count: accumCount });
+                this.stateStore.saveState(stateKey, {
+                    ...state,
+                    last_frame_seq: eventSeq,
+                    last_message_id: eventId,
+                });
+                return events;
+            }
+            // Threshold met — reset accumulator and advance
+            this._frameCountAccum.delete(stateKey);
+
             const actualSeq = JSON.parse(state.actual_sequence || "[]");
             actualSeq.push(expectedLabelId);
 
@@ -527,7 +745,7 @@ class FlowRuntime {
             const newStepIndex = currentStepIndex + 1;
 
             if (newStepIndex >= this.totalSteps) {
-                // All steps completed → OK!
+                // All sequence steps completed
                 const completedState = {
                     ...state,
                     step_index: newStepIndex,
@@ -536,16 +754,30 @@ class FlowRuntime {
                     steps_data: JSON.stringify(stepsData),
                     actual_sequence: JSON.stringify(actualSeq),
                 };
-                const result = this._buildTerminalResult(
-                    completedState, "OK", null, nowMs
-                );
-                this.stateStore.resetState(stateKey);
-                events.push({
-                    type: "terminal",
-                    stateKey,
-                    state: { ...completedState },
-                    result,
-                });
+                if (this.endLabel) {
+                    // End label exists → transition to WAIT_END, don't auto-complete
+                    this.stateStore.saveState(stateKey, completedState);
+                    events.push({
+                        type: "transition",
+                        stateKey,
+                        state: { ...completedState },
+                        labelId: expectedLabelId,
+                        previousStepIndex: currentStepIndex,
+                    });
+                } else {
+                    // No end label → auto-complete with OK
+                    const result = this._buildTerminalResult(
+                        completedState, "OK", null, nowMs
+                    );
+                    this.stateStore.resetState(stateKey);
+                this._frameCountAccum.delete(stateKey);
+                    events.push({
+                        type: "terminal",
+                        stateKey,
+                        state: { ...completedState },
+                        result,
+                    });
+                }
             } else {
                 // Advance to next step
                 const updatedState = {
@@ -567,13 +799,14 @@ class FlowRuntime {
             }
         } else if (hasSkip && !hasExpected) {
             // Skip: matched a label ahead of expected → NG
-            const skippedLabel = this.topology[matchedPositions[matchedPositions.length - 1]].labelId;
+            const skippedLabel = this.sequenceLabels[matchedPositions[matchedPositions.length - 1]].labelId;
             const result = this._buildTerminalResult(
                 state, "NG",
                 `期望步骤 ${expectedLabelId}，但识别到 ${skippedLabel} (跳步)`,
                 nowMs
             );
             this.stateStore.resetState(stateKey);
+                this._frameCountAccum.delete(stateKey);
             events.push({
                 type: "terminal",
                 stateKey,
@@ -581,29 +814,23 @@ class FlowRuntime {
                 result,
             });
         } else if (hasRepeat && !hasExpected) {
-            // Repeat: matched an earlier label → NG
-            const repeatedLabel = this.topology[matchedPositions[0]].labelId;
-            const result = this._buildTerminalResult(
-                state, "NG",
-                `期望步骤 ${expectedLabelId}，但再次识别到 ${repeatedLabel} (乱序)`,
-                nowMs
-            );
-            this.stateStore.resetState(stateKey);
-            events.push({
-                type: "terminal",
-                stateKey,
-                state: { ...state },
-                result,
+            // Repeat: matched an earlier label → silently ignore, just update tracking
+            this.stateStore.saveState(stateKey, {
+                ...state,
+                last_frame_seq: eventSeq,
+                last_message_id: eventId,
             });
+            return events;
         } else if (hasExpected && hasSkip) {
             // Both expected and skip in same frame — ambiguous, treat as NG (skip)
-            const skippedLabel = this.topology[matchedPositions.find((p) => p > currentStepIndex)].labelId;
+            const skippedLabel = this.sequenceLabels[matchedPositions.find((p) => p > currentStepIndex)].labelId;
             const result = this._buildTerminalResult(
                 state, "NG",
                 `同一帧中同时匹配 ${expectedLabelId} 和 ${skippedLabel}，判定为跳步`,
                 nowMs
             );
             this.stateStore.resetState(stateKey);
+                this._frameCountAccum.delete(stateKey);
             events.push({
                 type: "terminal",
                 stateKey,
@@ -618,6 +845,7 @@ class FlowRuntime {
                 nowMs
             );
             this.stateStore.resetState(stateKey);
+                this._frameCountAccum.delete(stateKey);
             events.push({
                 type: "terminal",
                 stateKey,
@@ -641,20 +869,32 @@ class FlowRuntime {
             ? this._expectedLabelId(state.step_index)
             : null;
 
+        // Look up the missing/expected step's alarm_name for NG cases
+        let missingStepAlarmName = null;
+        if (status !== "OK" && expectedLabel) {
+            const expectedDef = this.sequenceLabels.find(
+                (l) => l.labelId === expectedLabel
+            );
+            if (expectedDef && expectedDef.alarmName) {
+                missingStepAlarmName = expectedDef.alarmName;
+            }
+        }
+
         const resultEventId = makeEventId(
             this.workflowId, state.session_id, streamId,
-            state.cycle_id, status
+            state.cycle_id || randomUUID(), status
         );
         return {
             cycle_id: state.cycle_id,
             previous_state: this._stateName(state.step_index),
             current_state: "IDLE",
-            recognized_step: status === "OK"
-                ? this.topology[this.totalSteps - 1].labelId
+            recognized_step: status === "OK" && this.totalSteps > 0
+                ? this.sequenceLabels[this.totalSteps - 1].labelId
                 : null,
             expected_step: expectedLabel,
             result_status: status,
             failure_reason: reason || null,
+            missing_step_alarm_name: missingStepAlarmName,
             cycle_started_at: state.cycle_started_at_ms
                 ? beijingNowISO(state.cycle_started_at_ms) : null,
             cycle_finished_at: beijingNowISO(nowMs),
@@ -672,6 +912,7 @@ class FlowRuntime {
             start_frame_seq: state.start_frame_seq,
             end_frame_seq: state.last_frame_seq,
             steps_data: state.steps_data,
+            image_path: state.image_path || state.last_image_path || "",
         };
     }
 
@@ -682,7 +923,7 @@ class FlowRuntime {
         const streamId = makeStreamId(state.group_id, state.source_id);
         const resultEventId = makeEventId(
             this.workflowId, state.session_id, streamId,
-            state.cycle_id, "TRANSITION"
+            state.cycle_id || randomUUID(), "TRANSITION"
         );
         return {
             cycle_id: state.cycle_id,
@@ -715,8 +956,10 @@ class FlowRuntime {
      */
     recover(nowMs = Date.now()) {
         const results = [];
-        const active = this.stateStore.listActive();
+        const active = this.stateStore.listActive(this.totalSteps);
         for (const state of active) {
+            // Also recognize states at totalSteps when end label exists (WAIT_END)
+            if (!this._isActive(state)) continue;
             const elapsed = state.cycle_started_at_ms
                 ? nowMs - state.cycle_started_at_ms
                 : Infinity;

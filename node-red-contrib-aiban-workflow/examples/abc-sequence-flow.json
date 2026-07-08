@@ -42,6 +42,7 @@
         "model_id": "1",
         "label": "A",
         "confidence": 0.5,
+        "frame_count": 1,
         "x": 310,
         "y": 200,
         "wires": [["label-b"]]
@@ -55,6 +56,7 @@
         "model_id": "1",
         "label": "B",
         "confidence": 0.5,
+        "frame_count": 1,
         "x": 470,
         "y": 200,
         "wires": [["label-c"]]
@@ -68,6 +70,7 @@
         "model_id": "1",
         "label": "C",
         "confidence": 0.5,
+        "frame_count": 1,
         "x": 630,
         "y": 200,
         "wires": [["result-abc"]]
@@ -91,7 +94,9 @@
         "type": "aiban-result-db",
         "z": "phase2-abc-tab",
         "name": "结果入库 (MySQL)",
-        "tableName": "icamera_data.workflow_abc_result",
+        "tableName": "icamera_data.icam_alarm_data",
+        "regionName": "",
+        "okAlarmContent": "流程OK",
         "maxRetries": "3",
         "retryDelayMs": "500",
         "queueSize": "1000",

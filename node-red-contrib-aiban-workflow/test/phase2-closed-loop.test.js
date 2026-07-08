@@ -97,22 +97,22 @@ function makeLabelMatches(matchedIds, topology) {
 }
 
 const ABC_TOPOLOGY = [
-    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
-    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
-    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
+    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 1 },
+    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5, frameCount: 1 },
+    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5, frameCount: 1 },
 ];
 
 const ACB_TOPOLOGY = [
-    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
-    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
-    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
+    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 1 },
+    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5, frameCount: 1 },
+    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5, frameCount: 1 },
 ];
 
 const ABDC_TOPOLOGY = [
-    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
-    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
-    { labelId: "D", modelId: "1", label: "D", confidenceMin: 0.5 },
-    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
+    { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 1 },
+    { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5, frameCount: 1 },
+    { labelId: "D", modelId: "1", label: "D", confidenceMin: 0.5, frameCount: 1 },
+    { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5, frameCount: 1 },
 ];
 
 function createRuntime(topology, opts = {}) {
@@ -161,12 +161,74 @@ describe("TopologyCompiler (static validation)", () => {
     test("4-label and 5-label topologies pass", () => {
         assert.equal(TopologyCompiler.validate(ABDC_TOPOLOGY).valid, true);
         assert.equal(TopologyCompiler.validate([
-            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
-            { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5 },
-            { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5 },
-            { labelId: "D", modelId: "1", label: "D", confidenceMin: 0.5 },
-            { labelId: "E", modelId: "1", label: "E", confidenceMin: 0.5 },
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 1 },
+            { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5, frameCount: 1 },
+            { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5, frameCount: 1 },
+            { labelId: "D", modelId: "1", label: "D", confidenceMin: 0.5, frameCount: 1 },
+            { labelId: "E", modelId: "1", label: "E", confidenceMin: 0.5, frameCount: 1 },
         ]).valid, true);
+    });
+
+    test("frameCount defaults to 1 and must be >= 1", () => {
+        // Missing frameCount is valid (defaults to 1 in TopologyCompiler)
+        assert.equal(TopologyCompiler.validate([
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5 },
+        ]).valid, true);
+        // frameCount >= 1 is valid
+        assert.equal(TopologyCompiler.validate([
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 3 },
+        ]).valid, true);
+        // frameCount = 0 is invalid
+        const r = TopologyCompiler.validate([
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 0 },
+        ]);
+        assert.equal(r.valid, false);
+        assert.ok(r.errors.some((e) => e.includes("frame_count")));
+    });
+
+    test("compile preserves label alarm_name from aiban-label nodes", () => {
+        const nodes = [
+            { id: "runtime-1", type: "aiban-runtime", wires: [["label-a"]] },
+            {
+                id: "label-a",
+                type: "aiban-label",
+                label_id: "A",
+                model_id: "1",
+                label: "A",
+                confidence: 0.5,
+                frame_count: 1,
+                is_end: false,
+                alarm_name: "Leak A",
+                wires: [["label-b"]],
+            },
+            {
+                id: "label-b",
+                type: "aiban-label",
+                label_id: "B",
+                model_id: "1",
+                label: "B",
+                confidence: 0.5,
+                frame_count: 2,
+                is_end: false,
+                alarm_name: "Leak B",
+                wires: [["result-1"]],
+            },
+            { id: "result-1", type: "aiban-result", wires: [] },
+        ];
+        const RED = {
+            nodes: {
+                eachNode(fn) {
+                    nodes.forEach(fn);
+                },
+            },
+        };
+
+        const result = new TopologyCompiler(RED).compile("result-1");
+
+        assert.equal(result.valid, true);
+        assert.equal(result.labels[0].alarmName, "Leak A");
+        assert.equal(result.labels[1].alarmName, "Leak B");
+        assert.equal(result.labels[1].frameCount, 2);
     });
 });
 
@@ -275,6 +337,35 @@ describe("Scenario 3: A→C skip B → NG", () => {
         assert.ok(events[0].result.failure_reason.includes("C"));
     });
 
+    test("skipping B carries B alarm_name for DB alarm_content", () => {
+        const topology = [
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 1, alarmName: "Leak A" },
+            { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5, frameCount: 1, alarmName: "Leak B" },
+            { labelId: "C", modelId: "1", label: "C", confidenceMin: 0.5, frameCount: 1, alarmName: "Leak C" },
+        ];
+        const localCtx = createRuntime(topology);
+        try {
+            localCtx.runtime.process(makeFrame({
+                event_seq: 100, event_id: "msg-100",
+                label_matches: makeLabelMatches(["A"], topology),
+            }), 1000);
+
+            const events = localCtx.runtime.process(makeFrame({
+                event_seq: 101, event_id: "msg-101",
+                label_matches: makeLabelMatches(["C"], topology),
+            }), 2000);
+
+            assert.equal(events[0].type, "terminal");
+            assert.equal(events[0].result.result_status, "NG");
+            assert.equal(events[0].result.expected_step, "B");
+            assert.equal(events[0].result.missing_step_alarm_name, "Leak B");
+        } finally {
+            localCtx.store.close();
+            localCtx.audit.close();
+            safeCleanup(localCtx.dir);
+        }
+    });
+
     after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
 });
 
@@ -313,27 +404,39 @@ describe("Scenario 4: Timeout → TIMEOUT", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Scenario 5: Same label repeat → NG (乱序)
+// Scenario 5: Same label repeat → silently ignored (去重)
 // ---------------------------------------------------------------------------
 
-describe("Scenario 5: Same label repeat → NG", () => {
+describe("Scenario 5: Same label repeat → silently ignored", () => {
     let ctx;
     beforeEach(() => { ctx = createRuntime(ABC_TOPOLOGY); });
 
-    test("A again in WAIT_B produces NG", () => {
-        const { runtime } = ctx;
+    test("A again in WAIT_B is silently ignored, state unchanged", () => {
+        const { runtime, store } = ctx;
+        const key = makeStateKey("abc-demo", "test-session", 1, 1);
+
         runtime.process(makeFrame({
             event_seq: 100, event_id: "msg-100",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1000);
+        assert.equal(store.getState(key).step_index, 1, "A matched, should be at WAIT_B");
 
+        // A appears again while in WAIT_B → silently ignored
         const events = runtime.process(makeFrame({
             event_seq: 101, event_id: "msg-101",
             label_matches: makeLabelMatches(["A"], ABC_TOPOLOGY),
         }), 1100);
-        assert.equal(events[0].type, "terminal");
-        assert.equal(events[0].result.result_status, "NG");
-        assert.ok(events[0].result.failure_reason.includes("乱序"));
+        assert.equal(events.length, 0, "Repeat should produce no events");
+        assert.equal(store.getState(key).step_index, 1, "State should remain at WAIT_B");
+
+        // B can still continue normally
+        const eventsB = runtime.process(makeFrame({
+            event_seq: 102, event_id: "msg-102",
+            label_matches: makeLabelMatches(["B"], ABC_TOPOLOGY),
+        }), 1200);
+        assert.equal(eventsB.length, 1);
+        assert.equal(eventsB[0].type, "transition");
+        assert.equal(eventsB[0].labelId, "B");
     });
 
     after(() => { if (ctx) { ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir); } });
@@ -775,6 +878,138 @@ describe("Edge: multi-label frame", () => {
         assert.equal(events[0].type, "terminal");
         assert.equal(events[0].result.result_status, "NG");
         assert.ok(events[0].result.failure_reason.includes("跳步"));
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario 15: frame_count threshold — FlowRuntime accumulates before advancing
+// ---------------------------------------------------------------------------
+
+describe("Scenario 15: frame_count threshold", () => {
+    test("matched frames accumulate in FlowRuntime, only advance after threshold", () => {
+        // Topology with frame_count=3 on label A
+        const topo = [
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 3 },
+            { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5, frameCount: 1 },
+        ];
+        const ctx = createRuntime(topo, { cycleTimeoutMs: 5000 });
+        const { runtime, store } = ctx;
+        const key = makeStateKey("abc-demo", "test-session", 1, 1);
+
+        // Frame 1: A detected (count 1/3) — no transition
+        let events = runtime.process(makeFrame({
+            event_seq: 100, event_id: "msg-100",
+            label_matches: [
+                { label_id: "A", model_id: "1", label: "A", confidence_min: 0.5,
+                  matched: true, confidence: 0.9, match_duration_ms: 0.03,
+                  frame_count: 3, frame_count_current: 1 },
+            ],
+        }), 1000);
+        assert.equal(events.length, 0, "1st frame should not start cycle");
+
+        // Frame 2: A detected (count 2/3) — still no transition
+        events = runtime.process(makeFrame({
+            event_seq: 101, event_id: "msg-101",
+            label_matches: [
+                { label_id: "A", model_id: "1", label: "A", confidence_min: 0.5,
+                  matched: true, confidence: 0.92, match_duration_ms: 0.03,
+                  frame_count: 3, frame_count_current: 1 },
+            ],
+        }), 1100);
+        assert.equal(events.length, 0, "2nd frame should not start cycle");
+
+        // Frame 3: A detected (count 3/3) — transition!
+        events = runtime.process(makeFrame({
+            event_seq: 102, event_id: "msg-102",
+            label_matches: [
+                { label_id: "A", model_id: "1", label: "A", confidence_min: 0.5,
+                  matched: true, confidence: 0.94, match_duration_ms: 0.03,
+                  frame_count: 3, frame_count_current: 1 },
+            ],
+        }), 1200);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].type, "transition");
+        assert.equal(events[0].labelId, "A");
+        assert.equal(store.getState(key).step_index, 1);
+
+        ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
+    });
+
+    test("frame_count prevents premature accumulation before expected step", () => {
+        // Topology: A(frame_count=1) → B(frame_count=5)
+        const topo = [
+            { labelId: "A", modelId: "1", label: "A", confidenceMin: 0.5, frameCount: 1 },
+            { labelId: "B", modelId: "1", label: "B", confidenceMin: 0.5, frameCount: 5 },
+        ];
+        const ctx = createRuntime(topo, { cycleTimeoutMs: 5000 });
+        const { runtime, store } = ctx;
+        const key = makeStateKey("abc-demo", "test-session", 1, 1);
+
+        // B appears 4 times before A starts the cycle — should NOT count
+        for (let i = 0; i < 4; i++) {
+            const events = runtime.process(makeFrame({
+                event_seq: 100 + i, event_id: `msg-${100 + i}`,
+                label_matches: [
+                    { label_id: "B", model_id: "1", label: "B", confidence_min: 0.5,
+                      matched: true, confidence: 0.9, match_duration_ms: 0.03,
+                      frame_count: 5, frame_count_current: 1 },
+                ],
+            }), 1000 + i * 100);
+            assert.equal(events.length, 0, `B frame ${i + 1} before A should be ignored`);
+        }
+
+        // Now A starts the cycle (frame_count=1 → immediate transition)
+        let events = runtime.process(makeFrame({
+            event_seq: 104, event_id: "msg-104",
+            label_matches: [
+                { label_id: "A", modelId: "1", label: "A", confidenceMin: 0.5,
+                  matched: true, confidence: 0.95, match_duration_ms: 0.03,
+                  frame_count: 1, frame_count_current: 1 },
+            ],
+        }), 1400);
+        assert.equal(events.length, 1, "A should start cycle");
+        assert.equal(events[0].type, "transition");
+        assert.equal(store.getState(key).step_index, 1);
+
+        // B needs 5 frames from this point — the 4 before A don't count
+        // B frame 1 (first after entering WAIT_B)
+        events = runtime.process(makeFrame({
+            event_seq: 105, event_id: "msg-105",
+            label_matches: [
+                { label_id: "B", modelId: "1", label: "B", confidenceMin: 0.5,
+                  matched: true, confidence: 0.9, match_duration_ms: 0.03,
+                  frame_count: 5, frame_count_current: 1 },
+            ],
+        }), 1500);
+        assert.equal(events.length, 0, "B frame 1/5 should not advance");
+
+        // B frames 2-4
+        for (let i = 2; i <= 4; i++) {
+            runtime.process(makeFrame({
+                event_seq: 105 + i - 1, event_id: `msg-B${i}`,
+                label_matches: [
+                    { label_id: "B", modelId: "1", label: "B", confidenceMin: 0.5,
+                      matched: true, confidence: 0.9, match_duration_ms: 0.03,
+                      frame_count: 5, frame_count_current: 1 },
+                ],
+            }), 1500 + i * 100);
+        }
+
+        // B frame 5 — should complete
+        events = runtime.process(makeFrame({
+            event_seq: 110, event_id: "msg-B5",
+            label_matches: [
+                { label_id: "B", modelId: "1", label: "B", confidenceMin: 0.5,
+                  matched: true, confidence: 0.9, match_duration_ms: 0.03,
+                  frame_count: 5, frame_count_current: 1 },
+            ],
+        }), 2000);
+        // 2-label topology with no end label — B threshold met → terminal OK
+        assert.equal(events.length, 1);
+        assert.equal(events[0].type, "terminal");
+        assert.equal(events[0].result.result_status, "OK");
 
         ctx.store.close(); ctx.audit.close(); safeCleanup(ctx.dir);
     });

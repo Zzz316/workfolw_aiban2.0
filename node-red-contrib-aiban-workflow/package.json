@@ -27,7 +27,6 @@
       "workflow-api-trigger": "api-trigger-node.js",
       "workflow-api-output": "api-output-node.js",
       "aiban-runtime": "aiban-runtime.js",
-      "aiban-frame-input": "frame-input-node.js",
       "aiban-label": "aiban-label.js",
       "aiban-result": "aiban-result.js",
       "aiban-result-db": "aiban-result-db.js"

@@ -507,31 +507,41 @@ class AibanRunner:
         return {"stream_id": stream_id, "paused": False}
 
     def _cmd_screenshot(self, command: str, request_id: str, params: dict) -> dict:
-        """Handle 'screenshot' command — result is async via screenshot_result event."""
+        """Handle 'screenshot' command — returns accepted + async result event.
+
+        The command_result carries a basic accepted response (so Node-RED's
+        requestScreenshot() promise resolves quickly), while the real
+        image_path arrives via a separate screenshot_result event.
+
+        Mock mode: screenshot_result is emitted immediately after return.
+        Real SDK: do_screenshot blocks until next frame callback, so
+        screenshot_result is emitted synchronously after saveImage."""
         group_id = params["group_id"]
         source_id = params["source_id"]
-        # Actual screenshot happens on next frame callback for that source
-        # For now, schedule a screenshot result event
-        def _send_result():
-            import time
-            time.sleep(1.0)  # Simulate async
-            event = make_envelope(
-                event_type="screenshot_result",
-                session_id=self._lifecycle.session_id,
-                event_seq=self._lifecycle.next_seq(),
-                payload={
-                    "request_id": request_id,
-                    "ok": True,
-                    "group_id": group_id,
-                    "source_id": source_id,
-                    "image_path": f"screenshot_{group_id}_{source_id}_{request_id[:8]}.jpg",
-                    "error": None,
-                },
-            )
-            self._output_queue.put(event)
+        image_path = self._sdk_adapter.do_screenshot(group_id, source_id)
 
-        threading.Thread(target=_send_result, daemon=True).start()
-        return {"accepted": True, "group_id": group_id, "source_id": source_id}
+        # Emit async screenshot_result event for protocol compatibility
+        # with V1 behaviour and the Phase 1 test suite (tests 8, 22).
+        event = make_envelope(
+            event_type="screenshot_result",
+            session_id=self._lifecycle.session_id,
+            event_seq=self._lifecycle.next_seq(),
+            payload={
+                "request_id": request_id,
+                "group_id": group_id,
+                "source_id": source_id,
+                "image_path": image_path or "",
+                "ok": True,
+                "error": None,
+            },
+        )
+        self._output_queue.put(event)
+
+        return {
+            "image_path": image_path or "",
+            "group_id": group_id,
+            "source_id": source_id,
+        }
 
     # ------------------------------------------------------------------
     # Startup / shutdown

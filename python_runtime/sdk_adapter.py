@@ -10,8 +10,9 @@ Python dicts before leaving the callback scope (per SDK constraints).
 
 import logging
 import sys
+import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,15 @@ class SdkAdapter:
         self._event_handler: Optional[EventCallback] = None
         self._pipeline_started = False
 
+        # On-demand screenshot support.  For the real SDK, saveImage()
+        # / getSaveImagePath() are only valid inside the frame callback.
+        # Pending requests wait here; _on_frame signals them.
+        self._screenshot_lock = threading.Lock()
+        # (group_id, source_id) → (threading.Event, [image_path])
+        self._screenshot_requests: Dict[
+            Tuple[int, int], tuple
+        ] = {}
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -296,6 +306,24 @@ class SdkAdapter:
             return
         if not self._frame_handler:
             return
+
+        # ── On-demand screenshot ──────────────────────────────────────
+        # If a screenshot was requested for this source, save the image
+        # now while the metadata is still valid, then signal the waiter.
+        key = (int(group_id), int(source_id))
+        with self._screenshot_lock:
+            entry = self._screenshot_requests.pop(key, None)
+        if entry is not None:
+            event, holder = entry
+            try:
+                metadata.saveImage(False)
+                holder[0] = metadata.getSaveImagePath() or ""
+            except Exception:
+                logger.exception(
+                    "Screenshot saveImage failed g=%d s=%d",
+                    group_id, source_id,
+                )
+            event.set()
 
         try:
             frame_data = _extract_frame_data(group_id, source_id, metadata)
@@ -372,18 +400,68 @@ class SdkAdapter:
         if self._sdk:
             self._sdk.sourceControl(group_id, source_id, run)
 
-    def do_screenshot(self, group_id: int, source_id: int) -> Optional[str]:
-        """Take a screenshot and return the saved image path."""
+    def do_screenshot(
+        self, group_id: int, source_id: int, timeout: float = 5.0
+    ) -> Optional[str]:
+        """Take a screenshot and return the saved image path.
+
+        Mock mode:
+            Returns a V1-format path immediately (no actual file).
+
+        Real SDK:
+            Blocks until the next frame callback for this source, calls
+            ``metadata.saveImage(False)`` + ``getSaveImagePath()`` inside
+            the callback, and returns the path.  Times out after *timeout*
+            seconds if no frame arrives.
+        """
         if not self._sdk:
             return None
-        metadata = None
-        # For mock SDK, we need a metadata... but we don't have one in static context.
-        # Real SDK screenshots happen inside the frame callback where metadata exists.
-        # This method is a best-effort wrapper; in practice, screenshots are
-        # requested via command, and the actual saveImage is triggered on the
-        # next frame callback for the specified source.
-        logger.info("Screenshot requested for group=%d source=%d", group_id, source_id)
-        return None  # Actual path comes from next frame callback
+
+        if self._use_mock:
+            import time as _time
+            now = _time.time()
+            day_str = _time.strftime("%Y-%m-%d", _time.localtime(now))
+            time_str = _time.strftime("%H%M%S", _time.localtime(now))
+            ms = int((now % 1) * 1000)
+            filename = f"{time_str}_{ms:03d}.jpg"
+            image_path = (
+                f"D:/product/ngimages/group_{group_id}/"
+                f"source_{source_id}/{day_str}/{filename}"
+            )
+            logger.info(
+                "Mock screenshot: g=%d s=%d → %s",
+                group_id, source_id, image_path,
+            )
+            return image_path
+
+        # Real SDK — wait for the next frame callback
+        key = (int(group_id), int(source_id))
+        event = threading.Event()
+        holder: list = [""]  # mutable container
+
+        with self._screenshot_lock:
+            self._screenshot_requests[key] = (event, holder)
+
+        logger.info(
+            "Screenshot queued for g=%d s=%d (waiting for next frame, "
+            "timeout=%.0fs)",
+            group_id, source_id, timeout,
+        )
+        if event.wait(timeout=timeout):
+            path = holder[0]
+            logger.info(
+                "Screenshot completed: g=%d s=%d → %s",
+                group_id, source_id, path,
+            )
+            return path
+        else:
+            with self._screenshot_lock:
+                self._screenshot_requests.pop(key, None)
+            logger.warning(
+                "Screenshot timeout for g=%d s=%d (no frame in %.0fs)",
+                group_id, source_id, timeout,
+            )
+            return ""
 
 
 # ---------------------------------------------------------------------------

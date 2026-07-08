@@ -25,12 +25,12 @@
         "restartPolicy": "never",
         "maxRestartCount": 3,
         "restartBackoffMs": 5000,
-        "autoStart": false,
-        "x": 340,
-        "y": 200,
+        "autoStart": true,
+        "x": 120,
+        "y": 80,
         "wires": [
             [
-                "fd6e9e333856d89a"
+                "6cf6da4bb95625e8"
             ],
             [
                 "f89df019c25d07ba"
@@ -39,22 +39,6 @@
                 "e0c74e10b8b073d8"
             ]
         ]
-    },
-    {
-        "id": "fd6e9e333856d89a",
-        "type": "debug",
-        "z": "28c978f12126f179",
-        "name": "debug 1",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 620,
-        "y": 60,
-        "wires": []
     },
     {
         "id": "e0c74e10b8b073d8",
@@ -68,8 +52,8 @@
         "complete": "false",
         "statusVal": "",
         "statusType": "auto",
-        "x": 580,
-        "y": 300,
+        "x": 320,
+        "y": 160,
         "wires": []
     },
     {
@@ -84,8 +68,127 @@
         "complete": "false",
         "statusVal": "",
         "statusType": "auto",
-        "x": 580,
-        "y": 160,
+        "x": 320,
+        "y": 100,
         "wires": []
+    },
+    {
+        "id": "6cf6da4bb95625e8",
+        "type": "aiban-label",
+        "z": "28c978f12126f179",
+        "name": "插接1",
+        "label_id": "插接1",
+        "model_id": "0",
+        "label": "插接1",
+        "confidence": "0.80",
+        "frame_count": "5",
+        "is_end": false,
+        "alarm_name": "漏插接1",
+        "x": 350,
+        "y": 40,
+        "wires": [
+            [
+                "63a09885a2d35ed2"
+            ]
+        ]
+    },
+    {
+        "id": "63a09885a2d35ed2",
+        "type": "aiban-label",
+        "z": "28c978f12126f179",
+        "name": "插接2",
+        "label_id": "插接2",
+        "model_id": "0",
+        "label": "插接2",
+        "confidence": "0.80",
+        "frame_count": "5",
+        "is_end": false,
+        "alarm_name": "漏插接2",
+        "x": 570,
+        "y": 40,
+        "wires": [
+            [
+                "b8ab3fd7ea5d663b"
+            ]
+        ]
+    },
+    {
+        "id": "b8ab3fd7ea5d663b",
+        "type": "aiban-label",
+        "z": "28c978f12126f179",
+        "name": "插接3",
+        "label_id": "插接3",
+        "model_id": "0",
+        "label": "插接3",
+        "confidence": "0.80",
+        "frame_count": "5",
+        "is_end": false,
+        "alarm_name": "漏插接3",
+        "x": 790,
+        "y": 40,
+        "wires": [
+            [
+                "b53e6c12542ad53f"
+            ]
+        ]
+    },
+    {
+        "id": "b53e6c12542ad53f",
+        "type": "aiban-label",
+        "z": "28c978f12126f179",
+        "name": "end",
+        "label_id": "end",
+        "model_id": "0",
+        "label": "end",
+        "confidence": "0.95",
+        "frame_count": "5",
+        "is_end": true,
+        "alarm_name": "",
+        "x": 1010,
+        "y": 40,
+        "wires": [
+            [
+                "8e2a25d4a2a5f356"
+            ]
+        ]
+    },
+    {
+        "id": "8e2a25d4a2a5f356",
+        "type": "aiban-result",
+        "z": "28c978f12126f179",
+        "name": "结果判定",
+        "workflow_id": "abc-sequence-demo",
+        "cycle_timeout_ms": 30000,
+        "allow_same_frame_restart": true,
+        "stateDbPath": "data/workflow/flow-state.db",
+        "auditDir": "logs/workflow",
+        "x": 1200,
+        "y": 40,
+        "wires": [
+            [
+                "1939a843215054f0"
+            ]
+        ]
+    },
+    {
+        "id": "1939a843215054f0",
+        "type": "aiban-result-db",
+        "z": "28c978f12126f179",
+        "name": "结果入库",
+        "tableName": "icamera_data.icam_alarm_data",
+        "regionName": "测试区域",
+        "okAlarmContent": "流程OK",
+        "dbHost": "",
+        "dbPort": "3306",
+        "dbUser": "",
+        "dbName": "",
+        "maxRetries": 3,
+        "retryDelayMs": 500,
+        "queueSize": 1000,
+        "x": 1360,
+        "y": 40,
+        "wires": [
+            []
+        ]
     }
 ]

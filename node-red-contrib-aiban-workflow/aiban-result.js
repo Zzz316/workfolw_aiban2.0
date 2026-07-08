@@ -57,6 +57,7 @@ module.exports = function registerResultNode(RED) {
         let stateStore = null;
         let auditLogger = null;
         let closed = false;
+        let _runtimeNode = null; // aiban-runtime node instance (for on-demand screenshot)
         const timeoutTimers = new Map(); // state_key → setTimeout
 
         // === Lazy initialization on first input ===
@@ -83,6 +84,32 @@ module.exports = function registerResultNode(RED) {
             }
 
             topology = result.labels;
+
+            // Resolve the upstream aiban-runtime node for on-demand screenshot
+            // requests (V1 parity: saveImage at alarm time, not every frame).
+            if (result.entryNodeId) {
+                _runtimeNode = RED.nodes.getNode(result.entryNodeId);
+            }
+            if (!_runtimeNode || _runtimeNode.type !== "aiban-runtime") {
+                // Fallback: search all nodes for an aiban-runtime instance
+                RED.nodes.eachNode(function (n) {
+                    if (n.type === "aiban-runtime" && !_runtimeNode) {
+                        _runtimeNode = RED.nodes.getNode(n.id);
+                    }
+                });
+            }
+            if (_runtimeNode && typeof _runtimeNode.requestScreenshot !== "function") {
+                node.warn("[aiban-result] aiban-runtime 节点缺少 requestScreenshot 方法, "
+                    + "截图功能不可用");
+                _runtimeNode = null;
+            }
+            if (_runtimeNode) {
+                node.log(`[aiban-result] 已连接 aiban-runtime (${_runtimeNode.id}), `
+                    + "支持按需截图");
+            } else {
+                node.warn("[aiban-result] 未找到 aiban-runtime 节点, "
+                    + "截图功能不可用 — 图片路径将为空");
+            }
 
             // Create the runtime engine
             flowRuntime = new FlowRuntime({
@@ -123,6 +150,9 @@ module.exports = function registerResultNode(RED) {
 
             const now = Date.now();
             for (const state of active) {
+                // Skip states that are not truly active (e.g. completed without end label)
+                if (!flowRuntime._isActive(state)) continue;
+
                 const startedAt = state.cycle_started_at_ms;
                 const elapsed = startedAt ? now - startedAt : Infinity;
 
@@ -178,7 +208,7 @@ module.exports = function registerResultNode(RED) {
             timeoutTimers.delete(stateKey);
 
             const state = stateStore.getState(stateKey);
-            if (!state || state.step_index === 0 || state.step_index >= flowRuntime.totalSteps) return;
+            if (!state || !flowRuntime._isActive(state)) return;
 
             const now = Date.now();
             const elapsed = state.cycle_started_at_ms ? now - state.cycle_started_at_ms : cycleTimeoutMs;
@@ -327,7 +357,7 @@ module.exports = function registerResultNode(RED) {
                 // Extract key fields for audit — prefer new field names
                 // (event_id / event_seq) from aiban-runtime, falling back
                 // to legacy names (message_id / frame_seq) for backward
-                // compatibility with old frame-input-node.
+                // compatibility with legacy aiban-runtime versions.
                 const payload = msg.payload || {};
                 const aiban = msg.aiban || {};
                 const sessionId = aiban.session_id || payload.session_id || "";
@@ -386,42 +416,21 @@ module.exports = function registerResultNode(RED) {
                 // Process through the runtime engine
                 const events = flowRuntime.process(msg);
 
+                // Separate transition (audit-only) from terminal events.
+                // Transitions are handled synchronously; terminals wait for
+                // an on-demand screenshot before being emitted (V1 parity:
+                // metadata.saveImage() is called only at alarm time, not
+                // for every frame).
+                let terminalEvt = null;
                 for (const evt of events) {
                     const stageDurationMs = Number(
                         process.hrtime.bigint() - transStart
                     ) / 1e6;
 
                     if (evt.type === "terminal") {
-                        // Terminal event → send downstream
                         const result = evt.result;
                         result.stage_duration_ms = Number(stageDurationMs.toFixed(3));
-
-                        // Build and send message
-                        const resultMsg = _makeResultMessage(evt.state, result);
-
-                        // Audit
-                        const eventType = result.result_status === "OK"
-                            ? "sequence_completed"
-                            : result.result_status === "TIMEOUT"
-                                ? "sequence_timeout"
-                                : "sequence_failed";
-                        auditLogger.record(eventType, _auditFields(evt.state, result, result.result_status));
-                        auditLogger.recordCycleSummary(_cycleSummary(evt.state, result));
-
-                        // Clear timeout timer
-                        _clearTimeout(evt.stateKey);
-
-                        send(resultMsg);
-
-                        // Status update
-                        const statusText = result.result_status === "OK"
-                            ? `g${groupId}/s${sourceId} ✅ OK ${(result.cycle_duration_ms / 1000).toFixed(1)}s`
-                            : `g${groupId}/s${sourceId} ❌ ${result.result_status}`;
-                        node.status({
-                            fill: result.result_status === "OK" ? "green" : "red",
-                            shape: "dot",
-                            text: statusText,
-                        });
+                        terminalEvt = { evt, result, stageDurationMs };
                     } else if (evt.type === "transition") {
                         // Transition — audit only, no wire output
                         const state = evt.state;
@@ -436,8 +445,8 @@ module.exports = function registerResultNode(RED) {
                             recognized_step: evt.labelId,
                             stage_duration_ms: Number(stageDurationMs.toFixed(3)),
                             workflow_id: workflowId,
-                            message_id: messageId,
-                            frame_seq: frameSeq,
+                            message_id: eventId,
+                            frame_seq: eventSeq,
                             group_id: groupId,
                             source_id: sourceId,
                             session_id: sessionId,
@@ -462,15 +471,88 @@ module.exports = function registerResultNode(RED) {
                         });
                     }
                 }
+
+                if (terminalEvt) {
+                    // On-demand screenshot — only save image when a terminal
+                    // judgment is produced (matching V1 alarm-time saveImage).
+                    _emitTerminalWithScreenshot(terminalEvt, groupId, sourceId, send, done);
+                } else {
+                    if (done) done();
+                }
             } catch (error) {
                 node.error(
                     `aiban-result error: ${error.message}\n${error.stack}`,
                     msg
                 );
+                if (done) done();
+            }
+        });
+
+        // === On-Demand Screenshot + Terminal Emit ===
+        /**
+         * Request a screenshot from the Python backend before emitting a
+         * terminal result.  This mirrors V1 behaviour where
+         * metadata.saveImage() is called only at alarm time (not for
+         * every frame).
+         *
+         * If the aiban-runtime node is not available or the screenshot
+         * fails, the result is still emitted — just without image_path.
+         */
+        function _emitTerminalWithScreenshot(tev, groupId, sourceId, send, done) {
+            const { evt, result } = tev;
+
+            function emit(imagePath) {
+                if (imagePath) {
+                    result.image_path = imagePath;
+                }
+
+                // Build and send message
+                const resultMsg = _makeResultMessage(evt.state, result);
+
+                // Audit
+                const eventType = result.result_status === "OK"
+                    ? "sequence_completed"
+                    : result.result_status === "TIMEOUT"
+                        ? "sequence_timeout"
+                        : "sequence_failed";
+                auditLogger.record(eventType, _auditFields(evt.state, result, result.result_status));
+                auditLogger.recordCycleSummary(_cycleSummary(evt.state, result));
+
+                // Clear timeout timer
+                _clearTimeout(evt.stateKey);
+
+                send(resultMsg);
+
+                // Status update
+                const statusText = result.result_status === "OK"
+                    ? `g${groupId}/s${sourceId} ✅ OK ${(result.cycle_duration_ms / 1000).toFixed(1)}s`
+                    : `g${groupId}/s${sourceId} ❌ ${result.result_status}`;
+                node.status({
+                    fill: result.result_status === "OK" ? "green" : "red",
+                    shape: "dot",
+                    text: statusText,
+                });
+
+                if (done) done();
             }
 
-            if (done) done();
-        });
+            if (_runtimeNode) {
+                _runtimeNode.requestScreenshot(groupId, sourceId)
+                    .then(function (imagePath) {
+                        if (imagePath) {
+                            node.log(`[aiban-result] 截图已保存: ${imagePath}`);
+                        }
+                        emit(imagePath);
+                    })
+                    .catch(function (err) {
+                        node.warn(`[aiban-result] 截图失败: ${err.message}`);
+                        emit(""); // emit without image_path
+                    });
+            } else {
+                // No runtime node available — emit without image_path
+                emit("");
+            }
+        }
 
         // === Manual Reset ===
         function _handleReset(msg, send) {

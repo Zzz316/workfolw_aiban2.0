@@ -185,11 +185,15 @@ class WorkflowStateStore {
     }
 
     /**
-     * List all active (non-IDLE, non-completed) states.
+     * List all active (non-IDLE) states.
+     * Note: step_index == total_steps may still be active when an end label
+     * exists (WAIT_END). Callers should use FlowRuntime._isActive() to filter.
      * Used for Deploy/restart recovery.
      */
     listActive() {
-        const rows = this._listActiveStmt.all();
+        const rows = this.db.prepare(
+            `SELECT * FROM ${TABLE_NAME} WHERE step_index > 0`
+        ).all();
         return rows.map((r) => this._rowToObject(r));
     }
 

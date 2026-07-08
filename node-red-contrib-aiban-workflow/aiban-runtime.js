@@ -111,6 +111,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._pendingCommands = new Map();  // request_id → { resolve, reject, timer }
         this._shutdownInitiated = false;
         this._auditText = null;
+        this._legacyVideoLog = null;
 
         // --- Resolve runner path ---
         if (!this.runnerPath) {
@@ -125,6 +126,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         }
 
         this._openAuditLogs();
+        this._openLegacyVideoLog();
 
         // --- Set initial status ---
         this._setStatus("yellow", "configured");
@@ -192,6 +194,46 @@ module.exports = function registerAibanRuntimeNode(RED) {
         }
     };
 
+    AibanRuntimeNode.prototype._openLegacyVideoLog = function () {
+        try {
+            const directory = path.resolve(
+                RED.settings.userDir, "..", "log", "abvideologs"
+            );
+            fs.mkdirSync(directory, { recursive: true });
+            const textPath = path.join(directory, "vido_main.log");
+            this._legacyVideoLog = fs.createWriteStream(
+                textPath, { flags: "a", encoding: "utf8" }
+            );
+            this._writeLegacyVideoLog(
+                "runtime",
+                `==== aiban-runtime node started id=${this.id || ""} name=${this.name} ====`
+            );
+            this.log(`Legacy video log: ${textPath}`);
+        } catch (err) {
+            this.warn(`Cannot open legacy video log: ${err.message}`);
+        }
+    };
+
+    AibanRuntimeNode.prototype._legacyTimestamp = function () {
+        const now = new Date();
+        const pad = (value, width = 2) => String(value).padStart(width, "0");
+        return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} `
+            + `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.`
+            + `${pad(now.getMilliseconds(), 3)}`;
+    };
+
+    AibanRuntimeNode.prototype._writeLegacyVideoLog = function (scope, message) {
+        if (!this._legacyVideoLog) return;
+        try {
+            const text = typeof message === "string" ? message : JSON.stringify(message);
+            this._legacyVideoLog.write(
+                `[${this._legacyTimestamp()}][${scope}] ${text}\n`
+            );
+        } catch (_) {
+            // Logging must never interrupt inference.
+        }
+    };
+
     AibanRuntimeNode.prototype._writeFrameAudit = function (payload, eventSeq) {
         if (!this._auditText) return;
         const nodeReceivedAtMs = performance.timeOrigin + performance.now();
@@ -221,6 +263,13 @@ module.exports = function registerAibanRuntimeNode(RED) {
         const labelText = labels.length ? labels.join("; ") : "-";
         const timeText = new Date(nodeReceivedAtMs).toLocaleTimeString(
             "zh-CN", { hour12: false }
+        );
+        this._writeLegacyVideoLog(
+            "frame",
+            `#${eventSeq} ${streamId || shortStream} labels=${labelText} `
+            + `sdk_convert_ms=${sdkConvertMs.toFixed(2)} `
+            + `python_queue_ms=${pythonQueueMs.toFixed(2)} `
+            + `pipe_ms=${pipeMs.toFixed(2)} total_ms=${totalMs.toFixed(2)}`
         );
         this._auditText.write(
             `[PIPE] #${String(eventSeq).padEnd(5)} ${shortStream} │ `
@@ -312,6 +361,34 @@ module.exports = function registerAibanRuntimeNode(RED) {
         });
     };
 
+    /**
+     * Public API: request an on-demand screenshot from the Python backend.
+     *
+     * Used by aiban-result to save an image only when a terminal judgment
+     * (OK/NG) is produced — matching V1 behaviour where metadata.saveImage()
+     * is called at alarm time in workflow_engine.py.
+     *
+     * @param {number} groupId
+     * @param {number} sourceId
+     * @param {boolean} [saveRoi=false]
+     * @returns {Promise<string>} resolves with the saved image_path
+     */
+    AibanRuntimeNode.prototype.requestScreenshot = function (groupId, sourceId, saveRoi) {
+        const requestId = `screenshot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        return this._sendCommand({
+            schema_version: SCHEMA_VERSION,
+            command: "screenshot",
+            request_id: requestId,
+            params: {
+                group_id: Number(groupId),
+                source_id: Number(sourceId),
+                save_roi: Boolean(saveRoi),
+            },
+        }).then((result) => {
+            return (result && result.image_path) || "";
+        });
+    };
+
     // ==================================================================
     // Process management
     // ==================================================================
@@ -381,11 +458,16 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
         stderrRl.on("line", (line) => {
             this.log(`[python:stderr] ${line}`);
+            this._writeLegacyVideoLog("python:stderr", line);
         });
 
         // --- Process exit handler ---
         this._process.on("exit", (code, signal) => {
             this.log(`Python process exited: code=${code} signal=${signal}`);
+            this._writeLegacyVideoLog(
+                "runtime",
+                `Python process exited: code=${code} signal=${signal}`
+            );
             const restartAfterStop = this._stopping
                 && this._restartAfterStop
                 && !this._shutdownInitiated;
@@ -422,6 +504,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         // --- Process error handler ---
         this._process.on("error", (err) => {
             this.error(`Process error: ${err.message}`);
+            this._writeLegacyVideoLog("runtime:error", err.message);
             this._setStatus("red", "process error");
             this.send([
                 null,
@@ -473,6 +556,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
             this._startupTimer = setTimeout(() => {
                 if (!this._ready) {
                     this.warn("Startup timeout — runtime_ready not received");
+                    this._writeLegacyVideoLog(
+                        "runtime:error",
+                        `Startup timeout: runtime_ready not received within ${this.startupTimeoutMs}ms`
+                    );
                     this._setStatus("red", "startup timeout");
                     this._stopProcess(true);
                 }
@@ -589,6 +676,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         // observable as PARSE_ERROR.
         if (!trimmed.startsWith("{")) {
             this.log(`[python:native] ${trimmed.substring(0, 500)}`);
+            this._writeLegacyVideoLog("python:native", trimmed);
             return;
         }
 
@@ -603,6 +691,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 ? trimmed.substring(0, 255) + "..."
                 : trimmed;
             this.warn(`stdout parse error: ${err.message} | raw: ${truncated}`);
+            this._writeLegacyVideoLog(
+                "stdout:parse_error",
+                `${err.message} | raw: ${truncated}`
+            );
             if (this.strictStdout) {
                 this.send([
                     null,  // port 1
@@ -671,6 +763,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
             case "runtime_starting":
                 this._setStatus("yellow", "starting");
                 this.log(`Runner starting: ${JSON.stringify(payload)}`);
+                this._writeLegacyVideoLog("runtime_starting", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
@@ -684,12 +777,14 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 }
                 this._setStatus("green", "ready");
                 this.log(`Runner ready: ${JSON.stringify(payload)}`);
+                this._writeLegacyVideoLog("runtime_ready", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 this._resetHeartbeat();
                 break;
 
             case "runtime_stopping":
                 this._setStatus("yellow", "stopping");
+                this._writeLegacyVideoLog("runtime_stopping", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
@@ -697,11 +792,13 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 this._ready = false;
                 this._clearTimers();
                 this._setStatus("grey", "stopped");
+                this._writeLegacyVideoLog("runtime_stopped", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "runtime_error":
                 this.warn(`Runtime error: ${payload.error_code} — ${payload.message}`);
+                this._writeLegacyVideoLog("runtime:error", payload);
                 this._emitError(event, sessionId, eventSeq, payload.error_code);
                 break;
 
@@ -714,20 +811,24 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
             case "sdk_event":
                 this.log(`[SDK:${payload.level}] ${payload.message}`);
+                this._writeLegacyVideoLog("sdk_event", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "screenshot_result":
                 this.log(`Screenshot result: ${JSON.stringify(payload)}`);
+                this._writeLegacyVideoLog("screenshot_result", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "command_result":
+                this._writeLegacyVideoLog("command_result", payload);
                 this._handleCommandResult(payload);
                 break;
 
             default:
                 this.log(`Unknown event type: ${eventType}`);
+                this._writeLegacyVideoLog(eventType, payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
         }
@@ -829,6 +930,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._heartbeatTimer = setTimeout(() => {
             if (this._ready) {
                 this.warn("Heartbeat timeout — no heartbeat received");
+                this._writeLegacyVideoLog(
+                    "runtime:error",
+                    `Heartbeat timeout: no heartbeat received within ${this.heartbeatTimeoutMs}ms`
+                );
                 this._setStatus("red", "heartbeat lost");
                 this._stopProcess(true);
                 // Restart will be triggered by exit handler
@@ -847,6 +952,14 @@ module.exports = function registerAibanRuntimeNode(RED) {
             if (this._auditText) {
                 this._auditText.end();
                 this._auditText = null;
+            }
+            if (this._legacyVideoLog) {
+                this._writeLegacyVideoLog(
+                    "runtime",
+                    `==== aiban-runtime node closed id=${this.id || ""} ====`
+                );
+                this._legacyVideoLog.end();
+                this._legacyVideoLog = null;
             }
         };
 
@@ -882,6 +995,309 @@ module.exports = function registerAibanRuntimeNode(RED) {
             done();
         }
     };
+
+    // Pipeline labels endpoint: parse YAML pipeline config and extract
+    // model/label information for the aiban-label editor dropdowns.
+    //
+    // Security:
+    //   - Requires aiban-runtime.read permission.
+    //   - Restricts path reading to files under the configured SDK home
+    //     (or a default AiBan workspace) to prevent arbitrary file reads.
+    RED.httpAdmin.get(
+        "/aiban-runtime/pipeline-labels",
+        RED.auth.needsPermission("aiban-runtime.read"),
+        function getPipelineLabels(req, res) {
+            const pipelinePath = (req.query.path || "").trim();
+            if (!pipelinePath) {
+                res.json({
+                    pipeline_config: "",
+                    models: [],
+                    warning: "No pipeline config path provided",
+                });
+                return;
+            }
+
+            // Restrict to the SDK home directory (or its parents) to
+            // prevent directory-traversal reads of arbitrary files.
+            const sdkHome = path.resolve(
+                process.env.AIBAN_SDK_HOME || "D:/product/AiBanWorkSpace"
+            );
+            const resolved = path.resolve(pipelinePath);
+            if (!resolved.startsWith(sdkHome) && !resolved.startsWith(
+                path.resolve(sdkHome, "..")
+            )) {
+                res.status(403).json({
+                    pipeline_config: "",
+                    models: [],
+                    warning: "Access denied: path outside SDK home",
+                });
+                return;
+            }
+
+            try {
+                const fs = require("node:fs");
+                const yaml = require("js-yaml");
+
+                if (!fs.existsSync(resolved)) {
+                    res.json({
+                        pipeline_config: resolved,
+                        models: [],
+                        warning: "Pipeline config file not found: " + resolved,
+                    });
+                    return;
+                }
+
+                const raw = fs.readFileSync(resolved, "utf8");
+                const doc = yaml.load(raw);
+                // Attach the YAML file's directory so _extractModelsFromYaml
+                // can resolve relative model paths.
+                if (doc && typeof doc === "object") {
+                    doc._yamlDir = path.dirname(resolved);
+                }
+                const models = _extractModelsFromYaml(doc);
+                res.json({
+                    pipeline_config: resolved,
+                    models: models,
+                });
+            } catch (err) {
+                res.json({
+                    pipeline_config: resolved,
+                    models: [],
+                    warning: "Failed to parse pipeline config: " + (err.message || "unknown error"),
+                });
+            }
+        }
+    );
+
+    /**
+     * Extract model/label info from parsed AiBan pipeline YAML.
+     *
+     * AiBen main-flow.yaml structure:
+     *   ModelArrary.Models[] — { modelid, modelpath, ... }
+     *   Each model has a companion .json file with labels:
+     *     [{ sign: 0, labelCode: "...", labelName: "end" }, ...]
+     *
+     * Also handles sequence/monitor JSON configs as fallback.
+     */
+    function _extractModelsFromYaml(doc) {
+        if (!doc || typeof doc !== "object") return [];
+
+        const models = [];
+        const yamlDir = doc._yamlDir || "";  // set by caller
+
+        // ── AiBan main-flow.yaml format ──────────────────────────────
+        // Keep AiBan YAML modelid unchanged. The SDK frame payload uses the
+        // same key in payload.models, so label nodes must match it exactly.
+        if (doc.ModelArrary && Array.isArray(doc.ModelArrary.Models)) {
+            for (const mDef of doc.ModelArrary.Models) {
+                const yamlId = mDef.modelid !== undefined ? Number(mDef.modelid) : 0;
+                const mId = String(yamlId);
+                const modelPath = mDef.modelpath || "";
+                const labels = _loadLabelsFromModelJson(modelPath);
+
+                // Try to find a model name from path
+                const pathMatch = modelPath.match(/([^\\/]+)\.aiban$/i);
+                const modelName = pathMatch ? pathMatch[1] : "";
+
+                models.push({
+                    model_id: mId,
+                    model_name: modelName,
+                    labels: labels,
+                    warning: labels.length === 0 ? "No .json label file found for model" : null,
+                });
+            }
+            return models;
+        }
+
+        // ── Fallback formats (JSON configs, etc.) ────────────────────
+
+        // Format: { models: { "1": { name: "...", labels: [...] } } }
+        if (doc.models && typeof doc.models === "object" && !Array.isArray(doc.models)) {
+            for (const [mId, mDef] of Object.entries(doc.models)) {
+                if (mDef && typeof mDef === "object") {
+                    models.push({
+                        model_id: String(mId),
+                        model_name: mDef.name || mDef.model_name || "",
+                        labels: _normalizeLabels(mDef.labels),
+                        warning: null,
+                    });
+                }
+            }
+            return models;
+        }
+
+        // Format: { models: [{ model_id, name, labels }] }
+        if (doc.models && Array.isArray(doc.models)) {
+            for (const mDef of doc.models) {
+                if (mDef && typeof mDef === "object") {
+                    models.push({
+                        model_id: String(mDef.model_id || mDef.id || ""),
+                        model_name: mDef.name || mDef.model_name || "",
+                        labels: _normalizeLabels(mDef.labels),
+                        warning: null,
+                    });
+                }
+            }
+            return models;
+        }
+
+        // Format: { model_id, labels } (single model)
+        if (doc.model_id || doc.labels) {
+            models.push({
+                model_id: String(doc.model_id || "1"),
+                model_name: doc.name || doc.model_name || "",
+                labels: _normalizeLabels(doc.labels),
+                warning: null,
+            });
+            return models;
+        }
+
+        // Format: { sequence: { steps: [...] } }
+        if (doc.sequence && Array.isArray(doc.sequence.steps)) {
+            const labelsByModel = {};
+            for (const step of doc.sequence.steps) {
+                const mId = String(step.model_id || doc.model_id || "1");
+                if (!labelsByModel[mId]) {
+                    labelsByModel[mId] = { model_id: mId, model_name: "", labels: [] };
+                }
+                if (step.label && !labelsByModel[mId].labels.find(
+                    (l) => l.name === step.label
+                )) {
+                    labelsByModel[mId].labels.push({
+                        name: String(step.label),
+                        sign: step.id || "",
+                    });
+                }
+            }
+            for (const m of Object.values(labelsByModel)) {
+                models.push({ ...m, warning: null });
+            }
+            return models;
+        }
+
+        // Format: { rules: [...] } (monitor mode)
+        if (doc.rules && Array.isArray(doc.rules)) {
+            const labelsByModel = {};
+            for (const rule of doc.rules) {
+                const mId = String(rule.model_id || doc.model_id || "1");
+                if (!labelsByModel[mId]) {
+                    labelsByModel[mId] = { model_id: mId, model_name: "", labels: [] };
+                }
+                if (rule.label && !labelsByModel[mId].labels.find(
+                    (l) => l.name === rule.label
+                )) {
+                    labelsByModel[mId].labels.push({
+                        name: String(rule.label),
+                        sign: rule.id || "",
+                    });
+                }
+            }
+            for (const m of Object.values(labelsByModel)) {
+                models.push({ ...m, warning: null });
+            }
+            return models;
+        }
+
+        return models;
+    }
+
+    /**
+     * Load labels from a model's companion .json file.
+     * Model file:  D:/.../huayang-2.aiban
+     * Labels file: D:/.../huayang-2.json
+     *
+     * JSON format: [{ sign: 0, labelCode: "...", labelName: "end" }, ...]
+     */
+    function _loadLabelsFromModelJson(modelPath) {
+        if (!modelPath) return [];
+        try {
+            const fs = require("node:fs");
+            const jsonPath = modelPath.replace(/\.aiban$/i, ".json");
+            if (!fs.existsSync(jsonPath)) return [];
+            const raw = fs.readFileSync(jsonPath, "utf8");
+            const arr = JSON.parse(raw);
+            if (!Array.isArray(arr)) return [];
+            return arr.map(function (item) {
+                return {
+                    name: String(item.labelName || item.label || ""),
+                    sign: item.sign !== undefined ? String(item.sign) : "",
+                };
+            }).filter(function (l) { return l.name !== ""; });
+        } catch (_) {
+            return [];
+        }
+    }
+
+    /**
+     * Normalize labels into [{ name, sign }] format from various input shapes.
+     * Handles: string[], {name, sign}[], {label, sign}[], etc.
+     */
+    function _normalizeLabels(labels) {
+        if (!labels) return [];
+        if (!Array.isArray(labels)) return [];
+        return labels.map(function (l) {
+            if (typeof l === "string") {
+                return { name: l, sign: "" };
+            }
+            if (l && typeof l === "object") {
+                return {
+                    name: String(l.name || l.label || l.labelName || ""),
+                    sign: l.sign !== undefined ? String(l.sign) : "",
+                };
+            }
+            return { name: "", sign: "" };
+        }).filter(function (l) { return l.name !== ""; });
+    }
+
+    // Shared endpoint: query icam_alarmname_data for alarm name dropdowns
+    // used by aiban-label, aiban-result-db, and other nodes.
+    //
+    // Security:
+    //   - Requires aiban-runtime.read permission.
+    //   - DB credentials come from environment variables ONLY — passwords
+    //     are NEVER accepted via URL query parameters.
+    RED.httpAdmin.get(
+        "/aiban-alarm-names",
+        RED.auth.needsPermission("aiban-runtime.read"),
+        function getAlarmNames(req, res) {
+            (async () => {
+                let connection = null;
+                try {
+                    const mysql = require("mysql2/promise");
+                    const dbConfig = {
+                        host: process.env.MYSQL_HOST || "127.0.0.1",
+                        port: Number(process.env.MYSQL_PORT) || 3306,
+                        user: process.env.MYSQL_USER || "root",
+                        password: process.env.MYSQL_PASSWD || "",
+                        database: process.env.MYSQL_DB || "icamera_data",
+                        connectTimeout: 3000,
+                    };
+                    connection = await mysql.createConnection(dbConfig);
+                    const [rows] = await connection.execute(
+                        "SELECT id, alarmname FROM icam_alarmname_data ORDER BY id"
+                    );
+                    res.json({
+                        success: true,
+                        data: rows.map((r) => ({
+                            id: r.id,
+                            alarmname: r.alarmname,
+                        })),
+                    });
+                } catch (err) {
+                    res.json({
+                        success: false,
+                        error: err.message || "Unknown database error",
+                        hint: "请检查 MySQL 连接配置或确认 icam_alarmname_data 表是否存在",
+                        data: [],
+                    });
+                } finally {
+                    if (connection) {
+                        try { await connection.end(); } catch (_) { /* ignore */ }
+                    }
+                }
+            })();
+        }
+    );
 
     RED.httpAdmin.post(
         "/aiban-runtime/:id/:action",

@@ -5,7 +5,44 @@
     </div>
     <div class="form-row">
         <label for="node-input-tableName"><i class="fa fa-table"></i> 目标表</label>
-        <input type="text" id="node-input-tableName" placeholder="icamera_data.workflow_abc_result">
+        <input type="text" id="node-input-tableName" placeholder="icamera_data.icam_alarm_data">
+    </div>
+    <div class="form-row">
+        <label for="node-input-regionName"><i class="fa fa-map-marker"></i> 区域名称</label>
+        <input type="text" id="node-input-regionName" placeholder="可选，留空则写空字符串">
+    </div>
+    <div class="form-row">
+        <label for="node-input-okAlarmContent"><i class="fa fa-check"></i> OK内容</label>
+        <input type="text" id="node-input-okAlarmContent" placeholder="流程OK">
+        <span class="form-tip">需与 icam_alarmname_data.alarmname 对应。</span>
+    </div>
+    <div class="form-row">
+        <label for="aiban-db-ok-alarm-select"><i class="fa fa-database"></i> 从数据库选择</label>
+        <select id="aiban-db-ok-alarm-select" style="width:70%;">
+            <option value="">加载中...</option>
+        </select>
+    </div>
+    <hr>
+    <h4><i class="fa fa-database"></i> MySQL 连接</h4>
+    <div class="form-row">
+        <label for="node-input-dbHost"><i class="fa fa-server"></i> 主机地址</label>
+        <input type="text" id="node-input-dbHost" placeholder="127.0.0.1">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dbPort">端口</label>
+        <input type="number" id="node-input-dbPort" min="1" max="65535" value="3306" style="width:120px;">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dbUser"><i class="fa fa-user"></i> 用户名</label>
+        <input type="text" id="node-input-dbUser" placeholder="root">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dbPassword"><i class="fa fa-lock"></i> 密码</label>
+        <input type="password" id="node-input-dbPassword" placeholder="留空则无密码">
+    </div>
+    <div class="form-row">
+        <label for="node-input-dbName"><i class="fa fa-folder"></i> 数据库名</label>
+        <input type="text" id="node-input-dbName" placeholder="icamera_data">
     </div>
     <hr>
     <h4><i class="fa fa-refresh"></i> 重试策略</h4>
@@ -28,7 +65,7 @@
         <span style="font-size:0.85em;color:#888;">
             仅处理终端事件 (OK/NG/TIMEOUT/INTERRUPTED)。<br>
             使用 event_id 唯一键确保幂等写入。<br>
-            MySQL 配置通过环境变量 MYSQL_HOST/PORT/USER/PASSWD/DB 设置。<br>
+            MySQL 连接优先使用上方配置，留空则回退到环境变量 MYSQL_HOST/PORT/USER/PASSWD/DB。<br>
             写入失败后写入本地 data/workflow/db-failed.jsonl 作为兜底。
         </span>
     </div>
@@ -40,10 +77,19 @@
         color: "#90EE90",
         defaults: {
             name: { value: "结果入库" },
-            tableName: { value: "icamera_data.workflow_abc_result" },
+            tableName: { value: "icamera_data.icam_alarm_data" },
+            regionName: { value: "" },
+            okAlarmContent: { value: "流程OK" },
+            dbHost: { value: "127.0.0.1" },
+            dbPort: { value: 3306, validate: RED.validators.number() },
+            dbUser: { value: "root" },
+            dbName: { value: "icamera_data" },
             maxRetries: { value: 3 },
             retryDelayMs: { value: 500 },
             queueSize: { value: 1000 },
+        },
+        credentials: {
+            dbPassword: { type: "password" },
         },
         inputs: 1,
         outputs: 1,
@@ -51,6 +97,94 @@
         paletteLabel: "aiban result db",
         label: function () {
             return this.name || "结果入库";
+        },
+        oneditprepare: function () {
+            try {
+                const okInput = $("#node-input-okAlarmContent");
+                const okSelect = $("#aiban-db-ok-alarm-select");
+                let loadedAlarmNames = [];
+                let alarmNamesError = null;
+
+                function refreshOkAlarmSelect(filterText) {
+                    try {
+                        okSelect.empty();
+                        const ft = (filterText || "").toLowerCase();
+                        const filtered = ft
+                            ? loadedAlarmNames.filter(function (a) {
+                                return a.alarmname.toLowerCase().indexOf(ft) >= 0;
+                            })
+                            : loadedAlarmNames;
+                        if (alarmNamesError) {
+                            okSelect.append(
+                                $("<option></option>").attr("value", "").text("数据库错误: " + alarmNamesError)
+                            );
+                        } else if (filtered.length === 0 && loadedAlarmNames.length > 0) {
+                            okSelect.append(
+                                $("<option></option>").attr("value", "").text("无匹配 — 将使用手动输入")
+                            );
+                        } else if (loadedAlarmNames.length === 0 && !alarmNamesError) {
+                            okSelect.append(
+                                $("<option></option>").attr("value", "").text("无法连接数据库 — 请手动输入")
+                            );
+                        } else {
+                            okSelect.append(
+                                $("<option></option>").attr("value", "").text("选择OK内容...")
+                            );
+                        }
+                        filtered.forEach(function (a) {
+                            okSelect.append(
+                                $("<option></option>").attr("value", a.alarmname).text(a.alarmname)
+                            );
+                        });
+                        const currentVal = okInput.val();
+                        if (currentVal && !filtered.some(function (a) { return a.alarmname === currentVal; })) {
+                            okSelect.append(
+                                $("<option></option>")
+                                    .attr("value", currentVal)
+                                    .text(currentVal + " (手动)")
+                            );
+                        }
+                        okSelect.val(okInput.val() || "");
+                    } catch (e) {
+                        // Silently ignore
+                    }
+                }
+
+                $.getJSON("/aiban-alarm-names")
+                    .done(function (resp) {
+                        try {
+                            if (resp && resp.success && Array.isArray(resp.data)) {
+                                loadedAlarmNames = resp.data;
+                                alarmNamesError = null;
+                            } else {
+                                loadedAlarmNames = [];
+                                alarmNamesError = (resp && resp.error) || "未知错误";
+                            }
+                            refreshOkAlarmSelect();
+                        } catch (e) {
+                            loadedAlarmNames = [];
+                            alarmNamesError = null;
+                            refreshOkAlarmSelect();
+                        }
+                    })
+                    .fail(function (xhr) {
+                        loadedAlarmNames = [];
+                        alarmNamesError = "请求失败 (HTTP " + (xhr ? xhr.status : "?") + ")";
+                        refreshOkAlarmSelect();
+                    });
+
+                okSelect.on("change", function () {
+                    const value = okSelect.val();
+                    if (value) okInput.val(value);
+                });
+                okInput.on("change keyup", function () {
+                    const val = okInput.val();
+                    refreshOkAlarmSelect(val);
+                    okSelect.val(val || "");
+                });
+            } catch (e) {
+                // Alarm name DB lookup unavailable — manual input still works
+            }
         },
     });
 </script>

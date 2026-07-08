@@ -198,6 +198,11 @@ function createMockRED(options = {}) {
         httpAdmin: {
             _routes: [],
 
+            get(path, ...handlers) {
+                RED.httpAdmin._routes.push({ method: "GET", path, handlers });
+                return handlers[handlers.length - 1]; // return last handler
+            },
+
             post(path, ...handlers) {
                 RED.httpAdmin._routes.push({ method: "POST", path, handlers });
                 return handlers[handlers.length - 1]; // return last handler
