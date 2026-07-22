@@ -1,6 +1,6 @@
 # AiBan Workflow 2.0 开发任务说明书
 
-> 文档版本：v1.0.2<br>
+> 文档版本：v1.0.3<br>
 > 更新日期：2026-07-22<br>
 > 上位计划：[`WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md`](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md)<br>
 > 使用方式：每次只领取一个主任务；开始前核对依赖，结束时按验收标准提交证据。
@@ -74,7 +74,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 - 产品确认、现场 SDK、摄像头、MySQL 和外部接口能够按任务窗口提供。
 - 日期未扣除法定节假日、请假和外部等待时间。
 - “剩余人日”已经考虑现有代码的可复用程度，不是从零开发的总人日。
-- T01 完成后剩余基准串行计划为 99 人日，功能和发布任务计划完成日仍为 2026-12-15。
+- T02 完成后剩余基准串行计划为 96 人日，功能和发布任务计划完成日仍为 2026-12-15。
 - 另保留约 15% 风险缓冲，管理目标完成日为 2026-12-31。
 
 如果投入 2 名开发并提供独立测试/现场支持，T01～T04 与 T05～T08、T09～T10 与 T11～T12 可以并行，预计可将总日历周期缩短到约 16 周；不得通过并行跳过共同协议门禁。
@@ -106,8 +106,8 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 
 ### 2.4 当前总体判断
 
-- 项目整体成熟度：约 **38%（±5%）**。
-- 单 Runtime + 单线性顺序场景：约 **74%**。
+- 项目整体成熟度：约 **40%（±5%）**。
+- 单 Runtime + 单线性顺序场景：约 **78%**。
 - 多 group、多 scene 平台能力：约 **10%**。
 - 1.0 全业务功能对等迁移：约 **20%**。
 - 生产发布成熟度：约 **15%**。
@@ -119,7 +119,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 | 模块 | 对应任务 | 当前进度 | 当前证据 | 主要缺口 | 剩余人日 | 基准周期 | 计划结束 |
 |---|---|---:|---|---|---:|---|---|
 | M0 基线与文档 | T00 | 100% | 91/91 全量测试、30/30 Phase 2、基线报告及状态文档已完成 | 无 | 0 | 07-23～07-24；实际 07-22 | 07-22 |
-| M1 Runtime 生命周期 | T01～T04 | 78% | 六态 RuntimeController、PID/session/error/restart 状态及 107 项回归已完成 | 统一入口、restart、真实 Windows 回收 | 8 | 07-27～08-10 | 08-10 |
+| M1 Runtime 生命周期 | T01～T04 | 86% | 六态控制器、统一 controlRuntime、状态 API、编辑器控件及 116 项回归已完成 | restart 持续存活、真实 Windows 回收 | 5 | 07-27～08-10 | 08-10 |
 | M2 结果协议与分层 | T05～T08 | 55% | 线性 FlowRuntime、OK/NG/TIMEOUT、审计和截图已存在 | outcome 契约、双模式结果、复杂逻辑入口 | 13 | 08-11～08-27 | 08-27 |
 | M3 Group 元数据 | T09～T10 | 10% | 已有 pipelineConfig 和临时 ready 字段 | YAML 权威解析、真实 group/source/model | 5 | 08-28～09-03 | 09-03 |
 | M3 Scene Registry/前端 | T11～T13 | 20% | scene-manager localStorage Demo 已存在 | 后端存储、API、权限、真实启停和冲突处理 | 12 | 09-04～09-21 | 09-21 |
@@ -158,7 +158,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 |---|---|---:|---:|---|---:|---|---|---|
 | T00 | 冻结当前基线并校正文档状态 | P0 | 100% | DONE | 0 | 计划 07-23～07-24；实际 07-22 | 无 | 基线、测试、真实证据和状态文档已统一 |
 | T01 | 建立 RuntimeController 与真实状态模型 | P0 | 100% | DONE | 0 | 计划 07-27～07-29；实际 07-22 | T00 | 提交 `aea6e9a`；六态模型和 16 项独立控制器测试完成 |
-| T02 | 统一按钮、HTTP 和消息控制入口 | P0 | 35% | READY | 3 | 07-30～08-03 | T01 | 按钮和 HTTP 已存在，但无统一状态查询/反馈 |
+| T02 | 统一按钮、HTTP 和消息控制入口 | P0 | 100% | DONE | 0 | 计划 07-30～08-03；实际 07-22 | T01 | 提交 `7ac8f59`；三入口、状态 API、操作反馈和编辑器控件完成 |
 | T03 | 修复 restart 与进程回收 | P0 | 35% | READY | 2 | 08-04～08-05 | T01 | stop/重启测试已有，restart 持续存活断言缺失 |
 | T04 | 生命周期故障矩阵与 Windows 验收 | P0 | 30% | TODO | 3 | 08-06～08-10 | T02、T03 | 自动化覆盖较多，现场回收矩阵和运维证据不足 |
 | T05 | 冻结 workflow outcome/result 契约 | P0 | 20% | READY | 2 | 08-11～08-12 | T00 | 已有 abc_result，但无通用 outcome 契约；按主线顺序暂不领取 |
@@ -327,6 +327,16 @@ npm.cmd test
 - 未知节点、权限不足和无效 action。
 
 **依赖**：T01。
+
+**完成记录（2026-07-22）**
+
+- 新增统一 `controlRuntime(start/stop/restart/status)`，三种入口不再各自维护运行状态。
+- 新增 `GET /aiban-runtime/:id/status`，POST 控制返回 `operation_id`、接受状态和实际状态。
+- HTTP `202` 明确表示操作仍在处理中，不再把请求已接收描述为 READY。
+- 编辑器画布按钮先读取真实状态；编辑对话框显示六态、PID、期望状态以及启动/停止/重启控件。
+- 消息 start 可在停止后重新 spawn；消息 restart 使用停止旧进程后排队重建，不发送 Python 进程内 restart。
+- 新增编辑器契约和 HTTP/消息/幂等集成测试；全量回归 116 / 116 通过。
+- 功能提交为 `7ac8f59`。
 
 ---
 
@@ -1014,12 +1024,12 @@ scene-entry
 
 ## 15. 当前首批任务包
 
-首批只领取以下任务，不提前开发 Scene Router。T00、T01 已完成，当前主任务为 T02：
+首批只领取以下任务，不提前开发 Scene Router。T00～T02 已完成，当前主任务为 T03：
 
 ```text
 T00 基线与文档（DONE）
   → T01 RuntimeController（DONE）
-  → T02 统一控制入口（READY）
+  → T02 统一控制入口（DONE）
   → T03 restart/进程回收（READY）
   → T04 生命周期验收
 
