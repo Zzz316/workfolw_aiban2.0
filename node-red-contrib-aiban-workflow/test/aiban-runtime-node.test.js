@@ -568,6 +568,61 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         node._onClose(false, () => {});
     });
 
+    test("14b. never restart policy leaves an unexpected exit in ERROR", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, {
+            autoStart: false,
+            restartPolicy: "never",
+            restartBackoffMs: 20,
+        });
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+
+        proc.exitCode = 7;
+        proc.emit("exit", 7, null);
+        await delay(300);
+
+        assert.equal(mockSpawn.processes.length, 1);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        assert.equal(node.getRuntimeStatus().last_error.code, "PROCESS_EXITED");
+        node._onClose(false, () => {});
+    });
+
+    test("14c. on-failure policy does not restart a clean exit", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, {
+            autoStart: false,
+            restartPolicy: "on-failure",
+            restartBackoffMs: 20,
+        });
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+
+        proc.exitCode = 0;
+        proc.emit("exit", 0, null);
+        await delay(300);
+
+        assert.equal(mockSpawn.processes.length, 1);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        node._onClose(false, () => {});
+    });
+
+    test("14d. always restart policy restarts after a clean exit", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, {
+            autoStart: false,
+            restartPolicy: "always",
+            restartBackoffMs: 20,
+        });
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+
+        proc.exitCode = 0;
+        proc.emit("exit", 0, null);
+        await delay(350);
+
+        assert.equal(mockSpawn.processes.length, 2);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STARTING);
+        node._onClose(false, () => {});
+    });
+
     // ==================================================================
     // Test 15: Max restart count
     // ==================================================================
@@ -580,40 +635,34 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
             restartBackoffMs: 10,
         });
 
-        // First crash
+        // First crash after READY schedules recovery attempt #1.
         emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
         await delay(50);
         proc.exitCode = 1;
         proc.emit("exit", 1, null);
-        await delay(200);
+        await delay(100);
 
-        // Second crash
+        // Recovery processes fail before READY, so the consecutive counter is
+        // not reset.  The third crash must exhaust maxRestartCount=2.
         const proc2 = mockSpawn.processes[1];
-        if (proc2) {
-            emitEvent(proc2, makeReadyEvent({ event_seq: 0 }));
-            await delay(50);
-            proc2.exitCode = 1;
-            proc2.emit("exit", 1, null);
-            await delay(200);
-        }
+        assert.ok(proc2, "First recovery process should spawn");
+        proc2.exitCode = 1;
+        proc2.emit("exit", 1, null);
+        await delay(100);
 
-        // Third crash (should give up after maxRestartCount=2)
         const proc3 = mockSpawn.processes[2];
-        if (proc3) {
-            emitEvent(proc3, makeReadyEvent({ event_seq: 0 }));
-            await delay(50);
-            proc3.exitCode = 1;
-            proc3.emit("exit", 1, null);
-            await delay(200);
-        }
+        assert.ok(proc3, "Second recovery process should spawn");
+        proc3.exitCode = 1;
+        proc3.emit("exit", 1, null);
+        await delay(150);
 
-        // Should have stopped spawning
-        const finalCount = mockSpawn.processes.length;
-        assert.ok(finalCount <= 4, `Should not spawn beyond limit (initial + maxRestartCount), got ${finalCount}`);
-
-        const maxStatus = node._statusCalls.find(s => s.text && s.text.includes("max restarts"));
-        // May or may not have hit limit depending on timing — just verify node still works
-        assert.ok(true, "Node survived restart limit test");
+        assert.equal(mockSpawn.processes.length, 3, "No process may spawn beyond the limit");
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        assert.equal(node.getRuntimeStatus().restart_count, 2);
+        assert.equal(node.getRuntimeStatus().last_error.code, "MAX_RESTARTS_REACHED");
+        assert.ok(
+            node._statusCalls.some(status => status.text && status.text.includes("max restarts"))
+        );
 
         node._onClose(false, () => {});
     });
@@ -639,6 +688,41 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
         assert.equal(node.getRuntimeStatus().last_error.code, "STARTUP_TIMEOUT");
 
+        node._onClose(false, () => {});
+    });
+
+    test("16b. Runner start failure becomes SDK_START_FAILED", async () => {
+        const config = makeConfig({ autoStart: true, _spawn: mockSpawn });
+        const node = new (registry.get("aiban-runtime").constructor)(config);
+        await delay(300);
+        const proc = mockSpawn.processes[0];
+        const stdinWrites = [];
+        proc.stdin.on("data", chunk => stdinWrites.push(chunk.toString()));
+        await delay(400);
+
+        const requestMatch = stdinWrites.join("").match(/"request_id":"([^"]+)"/);
+        assert.ok(requestMatch, "Auto-start command should be pending");
+        emitEvent(proc, {
+            schema_version: 1,
+            type: "command_result",
+            session_id: "test-session-001",
+            event_id: "evt-start-failed",
+            event_seq: 0,
+            emitted_at: new Date().toISOString(),
+            payload: {
+                request_id: requestMatch[1],
+                ok: false,
+                command: "start",
+                result: null,
+                error: "SDK import or pipeline configuration failed",
+            },
+        });
+        await delay(100);
+
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        assert.equal(node.getRuntimeStatus().last_error.code, "SDK_START_FAILED");
+        node._stopProcess(true, { operationId: "cleanup-sdk-start-failure" });
+        await delay(50);
         node._onClose(false, () => {});
     });
 
@@ -1002,6 +1086,43 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         node._onClose(false, () => {});
     });
 
+    test("27b. Stop timeout records ERROR, audit data and final STOPPED", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, {
+            autoStart: false,
+            shutdownTimeoutMs: 100,
+        });
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+        proc.kill = function holdExit(signal) {
+            this.killed = true;
+            this.signalCode = signal || "SIGTERM";
+            this.exitCode = -1;
+            return true;
+        };
+
+        node.controlRuntime("stop", {
+            operationId: "op-stop-timeout",
+            source: "test",
+        });
+        await delay(175);
+
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        assert.equal(node.getRuntimeStatus().desired_state, DesiredState.STOPPED);
+        assert.equal(node.getRuntimeStatus().last_error.code, "STOP_TIMEOUT");
+        const forceKillLog = node._logs.find(entry =>
+            entry.msg && entry.msg.includes("operation_id=op-stop-timeout")
+        );
+        assert.ok(forceKillLog);
+        assert.ok(forceKillLog.msg.includes(`pid=${proc.pid}`));
+        assert.ok(forceKillLog.msg.includes("reason=shutdown_timeout:stop"));
+
+        proc.emit("exit", -1, "SIGKILL");
+        await delay(50);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STOPPED);
+        assert.equal(node.getRuntimeStatus().pid, null);
+        node._onClose(false, () => {});
+    });
+
     // ==================================================================
     // Test 28: Close sends stop command
     // ==================================================================
@@ -1025,6 +1146,37 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         proc.emit("exit", 0, null);
         await delay(100);
         assert.ok(closeDone, "Close done should be called after exit");
+    });
+
+    test("28b. Node deletion timeout force-kills with an audited reason", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, {
+            autoStart: false,
+            shutdownTimeoutMs: 100,
+        });
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+        proc.kill = function holdExit(signal) {
+            this.killed = true;
+            this.signalCode = signal || "SIGTERM";
+            this.exitCode = -1;
+            return true;
+        };
+
+        let closeDone = false;
+        node._onClose(true, () => { closeDone = true; });
+        await delay(175);
+
+        assert.equal(proc.killed, true);
+        assert.equal(closeDone, false, "Delete must wait for the real exit event");
+        const forceKillLog = node._logs.find(entry =>
+            entry.msg && entry.msg.includes("reason=node_deleted_timeout")
+        );
+        assert.ok(forceKillLog);
+        assert.ok(forceKillLog.msg.includes(`pid=${proc.pid}`));
+
+        proc.emit("exit", -1, "SIGKILL");
+        await delay(50);
+        assert.equal(closeDone, true);
     });
 
     test("29. Message start recreates the process after it was stopped", async () => {
