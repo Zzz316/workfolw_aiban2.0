@@ -1,7 +1,8 @@
-# AiBan Runtime Protocol v1.0
+# AiBan Runtime Protocol v1.1
 
-> 文档版本：v1.0
-> 编制日期：2026-07-02
+> 文档版本：v1.1<br>
+> 编制日期：2026-07-02<br>
+> 更新日期：2026-07-22<br>
 > 协议版本：`schema_version: 1`
 
 ---
@@ -24,6 +25,40 @@
 3. `stderr` 内容被视为诊断信息，不参与协议解析。
 4. 所有事件和控制命令必须包含 `schema_version` 字段（当前为 `1`）。
 5. 发送方不假设接收方一次 `readline()` 一定能读到完整一行。
+
+### 1.1 Node-RED 运行时状态模型
+
+JSONL 事件协议和 Node-RED 控制面状态是两个层次。`aiban-runtime` 使用独立的 `RuntimeController` 保存真实控制状态：
+
+| 字段 | 含义 |
+|---|---|
+| `auto_start` | 部署后是否自动发起启动；只是配置策略 |
+| `desired_state` | 控制面期望状态：`READY` 或 `STOPPED` |
+| `actual_state` | 事件确认的实际状态 |
+| `pid` | 当前 Python Runner 进程 ID；进程退出后才清空 |
+| `session_id` | 最近一次 `runtime_ready` 确认的 Runner 会话 |
+| `last_error` | 最近一次生命周期错误的代码和消息 |
+| `last_state_at` | 最近一次状态资料变化时间 |
+| `restart_count` | 当前连续恢复计数；成功 READY 后清零 |
+
+`actual_state` 取值和进入条件如下：
+
+| 状态 | 进入条件 |
+|---|---|
+| `STOPPED` | 初始状态，或已收到停止/进程退出确认 |
+| `STARTING` | 已接受启动并开始创建/初始化 Runner；spawn 成功不能直接进入 READY |
+| `READY` | 仅在收到 `runtime_ready` 后进入 |
+| `STOPPING` | 已接受停止或收到 `runtime_stopping` |
+| `ERROR` | spawn 失败、启动/停止超时、心跳丢失或意外退出 |
+| `RECOVERING` | 根据重启策略等待重新拉起进程 |
+
+关键约束：
+
+1. 手动 start 不修改 `auto_start`，因此 `auto_start=false` 时仍可手动启动。
+2. 重复 start/stop 是幂等请求。
+3. 在 `STOPPING` 期间收到 start，只更新 `desired_state=READY` 并等待旧进程退出，不能伪造 READY。
+4. PID 只能由 spawn/exit 事件更新；`runtime_ready` 只能确认 SDK/Pipeline 已就绪。
+5. 编辑器状态颜色是 `actual_state` 的投影，不是状态事实来源。
 
 ---
 

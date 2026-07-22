@@ -23,6 +23,10 @@ const {
     emitEvent,
     getPortMessages,
 } = require("./test-helpers");
+const {
+    DesiredState,
+    RuntimeState,
+} = require("../lib/runtime-controller");
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -168,6 +172,8 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
     test("1. Constructor spawns Python and sends auto-start command on stdin", async () => {
         const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: true });
         assert.ok(proc, "Should have spawned process");
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STARTING);
+        assert.equal(node.getRuntimeStatus().pid, proc.pid);
 
         // Should have written auto-start command to stdin (with 500ms delay in _startProcess)
         const stdinData = await readStdinAfter(proc, 600);
@@ -226,6 +232,8 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         const lastStatus = node._statusCalls[node._statusCalls.length - 1];
         assert.strictEqual(lastStatus.fill, "green");
         assert.ok(lastStatus.text.includes("ready"));
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.READY);
+        assert.equal(node.getRuntimeStatus().session_id, "test-session-001");
 
         node._onClose(false, () => {});
     });
@@ -595,6 +603,8 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
 
         const timeoutStatus = node._statusCalls.find(s => s.text && s.text.includes("startup timeout"));
         assert.ok(timeoutStatus, "Should have startup timeout status");
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        assert.equal(node.getRuntimeStatus().last_error.code, "STARTUP_TIMEOUT");
 
         node._onClose(false, () => {});
     });
@@ -667,6 +677,8 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
 
         const spawnFailStatus = node._statusCalls.find(s => s.text && s.text.includes("spawn failed"));
         assert.ok(spawnFailStatus, "Should have spawn failed status");
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        assert.equal(node.getRuntimeStatus().last_error.code, "SPAWN_FAILED");
     });
 
     // ==================================================================
@@ -741,6 +753,9 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
 
         const afterCount = mockSpawn.processes.length;
         assert.ok(afterCount > beforeCount, `Should spawn process after admin start (${beforeCount} → ${afterCount})`);
+        assert.equal(node.autoStart, false, "Manual start must not mutate autoStart policy");
+        assert.equal(node.getRuntimeStatus().desired_state, DesiredState.READY);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STARTING);
 
         node._onClose(false, () => {});
     });
@@ -771,6 +786,8 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         );
 
         assert.strictEqual(resStatus, 200, "Stop endpoint should return 200");
+        assert.equal(node.getRuntimeStatus().desired_state, DesiredState.STOPPED);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STOPPING);
 
         node._onClose(false, () => {});
     });
@@ -852,6 +869,8 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
 
         const hbStatus = node._statusCalls.find(s => s.text && s.text.includes("heartbeat lost"));
         assert.ok(hbStatus, "Should have heartbeat lost status");
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
+        assert.equal(node.getRuntimeStatus().last_error.code, "HEARTBEAT_TIMEOUT");
 
         node._onClose(false, () => {});
     });

@@ -23,6 +23,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
 const { performance } = require("node:perf_hooks");
+const {
+    DesiredState,
+    RuntimeController,
+    RuntimeState,
+    RuntimeTransitionError,
+} = require("./lib/runtime-controller");
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -101,10 +107,6 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._process = null;
         this._sessionId = null;
         this._lastEventSeq = -1;
-        this._ready = false;
-        this._stopping = false;
-        this._restartAfterStop = false;
-        this._restartCount = 0;
         this._currentBackoff = 0;
         this._heartbeatTimer = null;
         this._startupTimer = null;
@@ -112,6 +114,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._shutdownInitiated = false;
         this._auditText = null;
         this._legacyVideoLog = null;
+        this._runtimeController = new RuntimeController({ autoStart: this.autoStart });
+        this._runtimeController.on("stateChanged", (transition) => {
+            this._applyRuntimeStatus(transition.current, transition.event);
+        });
 
         // --- Resolve runner path ---
         if (!this.runnerPath) {
@@ -129,7 +135,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._openLegacyVideoLog();
 
         // --- Set initial status ---
-        this._setStatus("yellow", "configured");
+        this._applyRuntimeStatus(this._runtimeController.getStatus(), "initialized");
 
         // --- Event handlers ---
         this.on("input", this._onInput.bind(this));
@@ -161,6 +167,58 @@ module.exports = function registerAibanRuntimeNode(RED) {
             shape: shapeMap[color] || "ring",
             text: `${this.name}: ${text}`,
         });
+    };
+
+    AibanRuntimeNode.prototype._applyRuntimeStatus = function (snapshot, event) {
+        const state = snapshot.actualState;
+        if (state === RuntimeState.READY) {
+            this._setStatus("green", "ready");
+            return;
+        }
+        if (state === RuntimeState.STARTING) {
+            this._setStatus("yellow", "starting");
+            return;
+        }
+        if (state === RuntimeState.STOPPING) {
+            this._setStatus("yellow", "stopping");
+            return;
+        }
+        if (state === RuntimeState.RECOVERING) {
+            this._setStatus("yellow", `restart #${snapshot.restartCount}`);
+            return;
+        }
+        if (state === RuntimeState.ERROR) {
+            const eventText = {
+                spawn_failed: "spawn failed",
+                startup_timeout: "startup timeout",
+                stop_timeout: "stop timeout",
+                heartbeat_timeout: "heartbeat lost",
+                process_error: "process error",
+                recovery_exhausted: "max restarts",
+            };
+            const errorText = eventText[event]
+                || (snapshot.lastError && snapshot.lastError.code)
+                || "error";
+            this._setStatus("red", String(errorText).toLowerCase());
+            return;
+        }
+        this._setStatus("grey", "stopped");
+    };
+
+    AibanRuntimeNode.prototype._transitionRuntime = function (method, ...args) {
+        try {
+            return this._runtimeController[method](...args);
+        } catch (err) {
+            if (err instanceof RuntimeTransitionError) {
+                this.warn(err.message);
+                return null;
+            }
+            throw err;
+        }
+    };
+
+    AibanRuntimeNode.prototype.getRuntimeStatus = function () {
+        return this._runtimeController.serialize();
     };
 
     AibanRuntimeNode.prototype._openAuditLogs = function () {
@@ -394,13 +452,26 @@ module.exports = function registerAibanRuntimeNode(RED) {
     // ==================================================================
 
     AibanRuntimeNode.prototype._startProcess = function (forceAutoStart) {
+        const startDecision = this._transitionRuntime("requestStart", {
+            source: forceAutoStart === true ? "manual" : "runtime",
+        });
         if (this._process && !this._process.killed) {
-            this.warn("Process already running, not starting");
+            if (startDecision && startDecision.queued) {
+                this.warn("Process is stopping; start request queued");
+            } else {
+                this.warn("Process already running, not starting");
+            }
+            return;
+        }
+        if (startDecision && startDecision.queued) {
             return;
         }
 
-        this._stopping = false;
-        this._setStatus("yellow", "starting");
+        this._sessionId = null;
+        this._lastEventSeq = -1;
+        this._transitionRuntime("spawnRequested", {
+            source: forceAutoStart === true ? "manual" : "runtime",
+        });
 
         const args = [
             "-u",  // unbuffered stdout/stderr
@@ -432,13 +503,15 @@ module.exports = function registerAibanRuntimeNode(RED) {
             this._process = this._spawnFn(this.pythonPath, args, options);
         } catch (err) {
             this.error(`Failed to spawn process: ${err.message}`);
-            this._setStatus("red", "spawn failed");
+            this._transitionRuntime("spawnFailed", err);
             return;
         }
+        const child = this._process;
+        this._transitionRuntime("processSpawned", { pid: child.pid });
 
         // --- Setup stdout reader (JSON Lines events) ---
         const stdoutRl = readline.createInterface({
-            input: this._process.stdout,
+            input: child.stdout,
             crlfDelay: Infinity,
         });
 
@@ -452,7 +525,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
         // --- Setup stderr reader (diagnostic logs) ---
         const stderrRl = readline.createInterface({
-            input: this._process.stderr,
+            input: child.stderr,
             crlfDelay: Infinity,
         });
 
@@ -462,17 +535,27 @@ module.exports = function registerAibanRuntimeNode(RED) {
         });
 
         // --- Process exit handler ---
-        this._process.on("exit", (code, signal) => {
+        let exitHandled = false;
+        child.on("exit", (code, signal) => {
+            if (exitHandled) {
+                return;
+            }
+            exitHandled = true;
             this.log(`Python process exited: code=${code} signal=${signal}`);
             this._writeLegacyVideoLog(
                 "runtime",
                 `Python process exited: code=${code} signal=${signal}`
             );
-            const restartAfterStop = this._stopping
-                && this._restartAfterStop
+            const stateBeforeExit = this._runtimeController.getStatus();
+            const restartAfterStop = stateBeforeExit.actualState === RuntimeState.STOPPING
+                && stateBeforeExit.desiredState === DesiredState.READY
                 && !this._shutdownInitiated;
-            this._process = null;
-            this._ready = false;
+            const expectedStop = this._shutdownInitiated
+                || stateBeforeExit.desiredState === DesiredState.STOPPED
+                || (stateBeforeExit.actualState === RuntimeState.STOPPING && !restartAfterStop);
+            if (this._process === child) {
+                this._process = null;
+            }
             this._clearTimers();
 
             // Resolve all pending commands as failed
@@ -481,31 +564,28 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 entry.reject(new Error(`Process exited before command completed`));
             }
             this._pendingCommands.clear();
+            this._transitionRuntime("processExited", {
+                code,
+                signal,
+                expected: expectedStop,
+            });
 
             if (restartAfterStop) {
-                this._stopping = false;
-                this._restartAfterStop = false;
-                this._setStatus("yellow", "restarting");
                 setTimeout(() => {
                     if (!this._shutdownInitiated) {
                         this._startProcess(true);
                     }
                 }, 200);
-            } else if (!this._stopping && !this._shutdownInitiated) {
-                this._setStatus("red", `exited code=${code}`);
+            } else if (!expectedStop && !this._shutdownInitiated) {
                 this._maybeRestart(code, signal);
-            } else {
-                this._stopping = false;
-                this._restartAfterStop = false;
-                this._setStatus("grey", "stopped");
             }
         });
 
         // --- Process error handler ---
-        this._process.on("error", (err) => {
+        child.on("error", (err) => {
             this.error(`Process error: ${err.message}`);
             this._writeLegacyVideoLog("runtime:error", err.message);
-            this._setStatus("red", "process error");
+            this._transitionRuntime("processError", err);
             this.send([
                 null,
                 null,
@@ -536,7 +616,12 @@ module.exports = function registerAibanRuntimeNode(RED) {
                         clearTimeout(this._startupTimer);
                         this._startupTimer = null;
                     }
-                    this._setStatus("red", "SDK start failed");
+                    if (this._runtimeController.actualState === RuntimeState.STARTING) {
+                        this._transitionRuntime("processError", {
+                            code: "SDK_START_FAILED",
+                            message: err.message,
+                        });
+                    }
                     this.send([
                         null,
                         null,
@@ -554,30 +639,37 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
             // Set startup timeout
             this._startupTimer = setTimeout(() => {
-                if (!this._ready) {
+                if (this._runtimeController.actualState === RuntimeState.STARTING) {
                     this.warn("Startup timeout — runtime_ready not received");
                     this._writeLegacyVideoLog(
                         "runtime:error",
                         `Startup timeout: runtime_ready not received within ${this.startupTimeoutMs}ms`
                     );
-                    this._setStatus("red", "startup timeout");
-                    this._stopProcess(true);
+                    this._transitionRuntime("startupTimeout", {
+                        code: "STARTUP_TIMEOUT",
+                        message: `runtime_ready not received within ${this.startupTimeoutMs}ms`,
+                    });
+                    if (this._process === child && !child.killed) {
+                        child.kill("SIGKILL");
+                    }
                 }
             }, this.startupTimeoutMs);
         }
     };
 
     AibanRuntimeNode.prototype._stopProcess = function (force) {
+        this._transitionRuntime("requestStop", {
+            source: force ? "forced" : "runtime",
+        });
         if (!this._process || this._process.killed) {
             return;
         }
 
-        this._stopping = true;
-        this._setStatus("yellow", "stopping");
+        const child = this._process;
 
         if (force) {
             this.log("Force killing Python process");
-            this._process.kill("SIGKILL");
+            child.kill("SIGKILL");
             return;
         }
 
@@ -590,16 +682,20 @@ module.exports = function registerAibanRuntimeNode(RED) {
         }).catch(() => {
             // If command fails, force kill
             this.warn("Stop command failed, force killing");
-            if (this._process && !this._process.killed) {
-                this._process.kill("SIGKILL");
+            if (this._process === child && !child.killed) {
+                child.kill("SIGKILL");
             }
         });
 
         // Set a hard timeout for graceful shutdown
         setTimeout(() => {
-            if (this._process && !this._process.killed) {
+            if (this._process === child && !child.killed) {
                 this.warn("Shutdown timeout, force killing");
-                this._process.kill("SIGKILL");
+                this._transitionRuntime("stopTimeout", {
+                    code: "STOP_TIMEOUT",
+                    message: `process did not exit within ${this.shutdownTimeoutMs}ms`,
+                });
+                child.kill("SIGKILL");
             }
         }, this.shutdownTimeoutMs);
     };
@@ -621,25 +717,36 @@ module.exports = function registerAibanRuntimeNode(RED) {
             return;  // Clean exit — don't restart
         }
 
-        if (this._restartCount >= this.maxRestartCount) {
+        if (this._runtimeController.restartCount >= this.maxRestartCount) {
             this.error(`Max restart count (${this.maxRestartCount}) reached, giving up`);
-            this._setStatus("red", "max restarts");
+            this._transitionRuntime("recoveryExhausted", {
+                code: "MAX_RESTARTS_REACHED",
+                message: `Maximum restart count (${this.maxRestartCount}) reached`,
+            });
             return;
         }
 
+        const previousRestartCount = this._runtimeController.restartCount;
         this._currentBackoff = Math.min(
-            this.restartBackoffMs * Math.pow(2, this._restartCount),
+            this.restartBackoffMs * Math.pow(2, previousRestartCount),
             MAX_RESTART_BACKOFF_MS
         );
-        this._restartCount++;
+        this._transitionRuntime("recoveryScheduled", {
+            code: "PROCESS_EXITED",
+            message: `Runtime exited: code=${code} signal=${signal}`,
+            details: { code, signal },
+        });
+        const restartCount = this._runtimeController.restartCount;
 
         this.log(
-            `Restarting in ${this._currentBackoff}ms (attempt ${this._restartCount}/${this.maxRestartCount})`
+            `Restarting in ${this._currentBackoff}ms (attempt ${restartCount}/${this.maxRestartCount})`
         );
-        this._setStatus("yellow", `restart #${this._restartCount}`);
 
         setTimeout(() => {
-            this._startProcess();
+            if (!this._shutdownInitiated
+                && this._runtimeController.desiredState === DesiredState.READY) {
+                this._startProcess(true);
+            }
         }, this._currentBackoff);
     };
 
@@ -761,21 +868,26 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 break;
 
             case "runtime_starting":
-                this._setStatus("yellow", "starting");
+                this._transitionRuntime("runtimeStarting", {
+                    sessionId,
+                    eventSeq,
+                });
                 this.log(`Runner starting: ${JSON.stringify(payload)}`);
                 this._writeLegacyVideoLog("runtime_starting", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "runtime_ready":
-                this._ready = true;
-                this._restartCount = 0;
+                this._sessionId = sessionId || this._sessionId;
                 this._currentBackoff = 0;
                 if (this._startupTimer) {
                     clearTimeout(this._startupTimer);
                     this._startupTimer = null;
                 }
-                this._setStatus("green", "ready");
+                this._transitionRuntime("runtimeReady", {
+                    sessionId: sessionId || undefined,
+                    pid: this._process ? this._process.pid : undefined,
+                });
                 this.log(`Runner ready: ${JSON.stringify(payload)}`);
                 this._writeLegacyVideoLog("runtime_ready", payload);
                 this._emitStatus(event, sessionId, eventSeq);
@@ -783,15 +895,20 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 break;
 
             case "runtime_stopping":
-                this._setStatus("yellow", "stopping");
+                this._transitionRuntime("runtimeStopping", {
+                    sessionId,
+                    eventSeq,
+                });
                 this._writeLegacyVideoLog("runtime_stopping", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "runtime_stopped":
-                this._ready = false;
                 this._clearTimers();
-                this._setStatus("grey", "stopped");
+                this._transitionRuntime("runtimeStopped", {
+                    sessionId,
+                    eventSeq,
+                });
                 this._writeLegacyVideoLog("runtime_stopped", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
@@ -803,7 +920,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 break;
 
             case "heartbeat":
-                if (this._ready) {
+                if (this._runtimeController.actualState === RuntimeState.READY) {
                     this._resetHeartbeat();
                 }
                 this._emitStatus(event, sessionId, eventSeq);
@@ -928,15 +1045,20 @@ module.exports = function registerAibanRuntimeNode(RED) {
             clearTimeout(this._heartbeatTimer);
         }
         this._heartbeatTimer = setTimeout(() => {
-            if (this._ready) {
+            if (this._runtimeController.actualState === RuntimeState.READY) {
                 this.warn("Heartbeat timeout — no heartbeat received");
                 this._writeLegacyVideoLog(
                     "runtime:error",
                     `Heartbeat timeout: no heartbeat received within ${this.heartbeatTimeoutMs}ms`
                 );
-                this._setStatus("red", "heartbeat lost");
-                this._stopProcess(true);
-                // Restart will be triggered by exit handler
+                this._transitionRuntime("heartbeatTimeout", {
+                    code: "HEARTBEAT_TIMEOUT",
+                    message: `no heartbeat received within ${this.heartbeatTimeoutMs}ms`,
+                });
+                if (this._process && !this._process.killed) {
+                    this._process.kill("SIGKILL");
+                }
+                // Unexpected exit is handled by the restart policy.
             }
         }, this.heartbeatTimeoutMs);
     };
@@ -947,6 +1069,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
     AibanRuntimeNode.prototype._onClose = function (removed, done) {
         this._shutdownInitiated = true;
+        this._transitionRuntime("requestStop", { source: "node_close" });
         this._clearTimers();
         const closeAuditLogs = () => {
             if (this._auditText) {
@@ -965,7 +1088,6 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
         if (this._process && !this._process.killed) {
             // Send stop and wait briefly
-            this._stopping = true;
             try {
                 const line = JSON.stringify({
                     schema_version: SCHEMA_VERSION,
@@ -1310,20 +1432,12 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 return;
             }
             if (action === "start") {
-                node.autoStart = true;
-                if (node._stopping && node._process) {
-                    node._restartAfterStop = true;
-                    node._setStatus("yellow", "waiting to restart");
-                    res.sendStatus(202);
-                    return;
-                }
+                const wasStopping = node._runtimeController.actualState === RuntimeState.STOPPING;
                 node._startProcess(true);
-                res.sendStatus(200);
+                res.sendStatus(wasStopping ? 202 : 200);
                 return;
             }
             if (action === "stop") {
-                node.autoStart = false;
-                node._restartAfterStop = false;
                 node._stopProcess(false);
                 res.sendStatus(200);
                 return;
