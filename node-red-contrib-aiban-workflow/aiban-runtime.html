@@ -5,6 +5,37 @@
   from stdout and sending control commands via stdin (JSON Lines).
 -->
 <script type="text/javascript">
+    function aibanRuntimeStatusRequest(nodeId) {
+        return $.ajax({
+            url: `aiban-runtime/${encodeURIComponent(nodeId)}/status`,
+            type: "GET",
+            dataType: "json",
+        });
+    }
+
+    function aibanRuntimeControlRequest(nodeId, action) {
+        return $.ajax({
+            url: `aiban-runtime/${encodeURIComponent(nodeId)}/${action}`,
+            type: "POST",
+            dataType: "json",
+        });
+    }
+
+    function aibanRuntimeNotifyResult(result) {
+        if (!result || result.accepted === false) {
+            RED.notify(
+                `aiban-runtime 操作失败：${(result && result.message) || "未知错误"}`,
+                "error"
+            );
+            return;
+        }
+        const operationText = result.operation_id ? ` (${result.operation_id})` : "";
+        RED.notify(
+            `操作已${result.accepted_status || "accepted"}${operationText}，实际状态：${result.actual_state}`,
+            result.accepted_status === "idempotent" ? "info" : "success"
+        );
+    }
+
     RED.nodes.registerType("aiban-runtime", {
         category: "AiBan",
         color: "#7EC8E3",
@@ -30,20 +61,34 @@
         icon: "bridge.svg",
         paletteLabel: "aiban-runtime",
         button: {
-            toggle: "autoStart",
             onclick: function () {
                 const node = this;
-                const action = node.autoStart ? "start" : "stop";
-                $.ajax({
-                    url: `aiban-runtime/${node.id}/${action}`,
-                    type: "POST",
-                    error: function (jqXHR) {
+                aibanRuntimeStatusRequest(node.id)
+                    .done(function (status) {
+                        const state = status.actual_state;
+                        if (["STARTING", "STOPPING", "RECOVERING"].includes(state)) {
+                            RED.notify(`aiban-runtime 正在处理中：${state}`, "warning");
+                            return;
+                        }
+                        let action = state === "READY" ? "stop" : "start";
+                        if (state === "ERROR" && status.pid) {
+                            action = "restart";
+                        }
+                        aibanRuntimeControlRequest(node.id, action)
+                            .done(aibanRuntimeNotifyResult)
+                            .fail(function (jqXHR) {
+                                RED.notify(
+                                    `aiban-runtime ${action} 失败：${jqXHR.responseText || jqXHR.statusText}`,
+                                    "error"
+                                );
+                            });
+                    })
+                    .fail(function (jqXHR) {
                         RED.notify(
-                            `aiban-runtime ${action} 失败：${jqXHR.responseText || jqXHR.statusText}`,
+                            `aiban-runtime 状态查询失败：${jqXHR.responseText || jqXHR.statusText}`,
                             "error"
                         );
-                    },
-                });
+                    });
             },
         },
 
@@ -56,6 +101,7 @@
         },
 
         oneditprepare: function () {
+            const runtimeNode = this;
             // Initialize tabs
             $("#aiban-runtime-tabs").tabs();
 
@@ -73,6 +119,110 @@
 
             policy.on("change", updateRestartVisibility);
             updateRestartVisibility();
+
+            function renderRuntimeState(status) {
+                const state = status.actual_state || "UNKNOWN";
+                const pending = ["STARTING", "STOPPING", "RECOVERING"].includes(state);
+                const labels = {
+                    STOPPED: "已停止",
+                    STARTING: "启动处理中",
+                    READY: "运行中（READY）",
+                    STOPPING: "停止处理中",
+                    ERROR: "运行失败",
+                    RECOVERING: "自动恢复中",
+                };
+                const colors = {
+                    STOPPED: "#777",
+                    STARTING: "#c58b00",
+                    READY: "#2e8b57",
+                    STOPPING: "#c58b00",
+                    ERROR: "#c33",
+                    RECOVERING: "#c58b00",
+                };
+                const errorText = status.last_error && status.last_error.message
+                    ? `：${status.last_error.message}`
+                    : "";
+                $("#aiban-runtime-actual-state")
+                    .text(`${labels[state] || state}${errorText}`)
+                    .css("color", colors[state] || "#777");
+                $("#aiban-runtime-state-detail").text(
+                    `期望=${status.desired_state || "-"} PID=${status.pid || "-"}`
+                );
+                $("#aiban-runtime-start").prop("disabled", pending || state === "READY");
+                $("#aiban-runtime-stop").prop(
+                    "disabled",
+                    pending || (state === "STOPPED" && !status.pid)
+                );
+                $("#aiban-runtime-restart").prop(
+                    "disabled",
+                    pending || (state === "STOPPED" && !status.pid)
+                );
+            }
+
+            function scheduleRefresh(delayMs) {
+                clearTimeout(runtimeNode._aibanRuntimePollTimer);
+                runtimeNode._aibanRuntimePollTimer = setTimeout(refreshRuntimeState, delayMs);
+            }
+
+            function refreshRuntimeState() {
+                aibanRuntimeStatusRequest(runtimeNode.id)
+                    .done(function (status) {
+                        renderRuntimeState(status);
+                        if (["STARTING", "STOPPING", "RECOVERING"].includes(status.actual_state)) {
+                            scheduleRefresh(1000);
+                        }
+                    })
+                    .fail(function () {
+                        $("#aiban-runtime-actual-state")
+                            .text("未部署或状态不可用")
+                            .css("color", "#777");
+                        $("#aiban-runtime-state-detail").text("");
+                        $(".aiban-runtime-control-button").prop("disabled", true);
+                    });
+            }
+
+            function invokeRuntimeAction(action) {
+                $(".aiban-runtime-control-button").prop("disabled", true);
+                aibanRuntimeControlRequest(runtimeNode.id, action)
+                    .done(function (result) {
+                        aibanRuntimeNotifyResult(result);
+                        renderRuntimeState(result);
+                        scheduleRefresh(500);
+                    })
+                    .fail(function (jqXHR) {
+                        RED.notify(
+                            `aiban-runtime ${action} 失败：${jqXHR.responseText || jqXHR.statusText}`,
+                            "error"
+                        );
+                        scheduleRefresh(500);
+                    });
+            }
+
+            $("#aiban-runtime-start").on("click", function (event) {
+                event.preventDefault();
+                invokeRuntimeAction("start");
+            });
+            $("#aiban-runtime-stop").on("click", function (event) {
+                event.preventDefault();
+                invokeRuntimeAction("stop");
+            });
+            $("#aiban-runtime-restart").on("click", function (event) {
+                event.preventDefault();
+                invokeRuntimeAction("restart");
+            });
+            refreshRuntimeState();
+        },
+
+        oneditsave: function () {
+            clearTimeout(this._aibanRuntimePollTimer);
+        },
+
+        oneditcancel: function () {
+            clearTimeout(this._aibanRuntimePollTimer);
+        },
+
+        oneditdelete: function () {
+            clearTimeout(this._aibanRuntimePollTimer);
         },
     });
 </script>
@@ -81,6 +231,20 @@
     <div class="form-row">
         <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
         <input type="text" id="node-input-name" placeholder="aiban-runtime">
+    </div>
+
+    <div class="form-row" id="aiban-runtime-control-row">
+        <label><i class="fa fa-power-off"></i> 运行状态</label>
+        <span id="aiban-runtime-actual-state" style="font-weight:600;">查询中</span>
+        <span id="aiban-runtime-state-detail" style="margin-left:8px;color:#777;"></span>
+        <div style="margin-left:105px;margin-top:8px;display:flex;gap:6px;">
+            <button type="button" id="aiban-runtime-start"
+                class="red-ui-button aiban-runtime-control-button">启动</button>
+            <button type="button" id="aiban-runtime-stop"
+                class="red-ui-button aiban-runtime-control-button">停止</button>
+            <button type="button" id="aiban-runtime-restart"
+                class="red-ui-button aiban-runtime-control-button">重启</button>
+        </div>
     </div>
 
     <div id="aiban-runtime-tabs" style="margin-top: 8px;">
@@ -186,10 +350,12 @@
     <p>接收控制命令：</p>
     <pre><code>msg.topic = "aiban/control"
 msg.payload = {
-    command: "start" | "stop" | "restart" | "health" | "screenshot",
+    command: "start" | "stop" | "restart" | "status" | "health" | "screenshot",
     params: { ... }
 }
 </code></pre>
+    <p><code>start/stop/restart/status</code> 使用 Node-RED 统一进程控制入口；返回操作 ID 和当前实际状态。
+    操作被接收不代表已经 READY，必须以 <code>actual_state</code> 或生命周期事件为准。</p>
 
     <h4>输出端口</h4>
     <ol>
@@ -206,7 +372,7 @@ msg.payload = {
     <ul>
         <li><b>Python 路径</b>：指定完整路径，禁止只依赖 PATH</li>
         <li><b>Runner 入口</b>：指向 <code>aiban_runner.py</code></li>
-        <li><b>自动启动</b>：Deploy 后自动发送 start 命令</li>
+        <li><b>自动启动</b>：Deploy 后自动发送 start 命令；该配置不代表当前运行状态</li>
         <li><b>重启策略</b>：异常退出时自动重启（最多 N 次）</li>
     </ul>
 </script>

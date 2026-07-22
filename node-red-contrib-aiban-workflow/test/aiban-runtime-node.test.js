@@ -114,6 +114,29 @@ function readStdinAfter(proc, delayMs) {
     });
 }
 
+function makeAdminResponse() {
+    return {
+        statusCode: 0,
+        body: null,
+        status(code) {
+            this.statusCode = code;
+            return this;
+        },
+        json(payload) {
+            this.body = payload;
+            return this;
+        },
+        send(payload) {
+            this.body = payload;
+            return this;
+        },
+        sendStatus(code) {
+            this.statusCode = code;
+            return this;
+        },
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Helper: create a node and optionally trigger manual process start.
 // Pass autoStart: false in config, then call this to get a running process.
@@ -742,13 +765,16 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         );
         assert.ok(startRoute, "Should have admin POST route");
 
-        let resStatus = 0;
+        const response = makeAdminResponse();
         await startRoute.handlers[startRoute.handlers.length - 1](
             { params: { id: node.id, action: "start" } },
-            { sendStatus: (code) => { resStatus = code; } }
+            response
         );
 
-        assert.strictEqual(resStatus, 200, "Start endpoint should return 200");
+        assert.strictEqual(response.statusCode, 202, "Start endpoint should return 202 accepted");
+        assert.ok(response.body.operation_id);
+        assert.equal(response.body.accepted, true);
+        assert.equal(response.body.actual_state, RuntimeState.STARTING);
         await delay(400);
 
         const afterCount = mockSpawn.processes.length;
@@ -756,6 +782,39 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         assert.equal(node.autoStart, false, "Manual start must not mutate autoStart policy");
         assert.equal(node.getRuntimeStatus().desired_state, DesiredState.READY);
         assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STARTING);
+
+        node._onClose(false, () => {});
+    });
+
+    test("22b. Repeated HTTP start is idempotent and does not double-spawn", async () => {
+        const config = makeConfig({ autoStart: false, _spawn: mockSpawn });
+        const node = new (registry.get("aiban-runtime").constructor)(config);
+        await delay(200);
+        assert.equal(mockSpawn.processes.length, 0);
+
+        const entry = registry.get("aiban-runtime");
+        if (!entry._instances) entry._instances = new Map();
+        entry._instances.set(node.id, node);
+        const startRoute = RED.httpAdmin._routes.find(
+            r => r.method === "POST" && r.path.includes(":action")
+        );
+
+        const first = makeAdminResponse();
+        await startRoute.handlers[startRoute.handlers.length - 1](
+            { params: { id: node.id, action: "start" } },
+            first
+        );
+        const second = makeAdminResponse();
+        await startRoute.handlers[startRoute.handlers.length - 1](
+            { params: { id: node.id, action: "start" } },
+            second
+        );
+
+        assert.equal(first.statusCode, 202);
+        assert.equal(first.body.idempotent, false);
+        assert.equal(second.statusCode, 202);
+        assert.equal(second.body.idempotent, true);
+        assert.equal(mockSpawn.processes.length, 1, "Repeated start must not spawn twice");
 
         node._onClose(false, () => {});
     });
@@ -779,13 +838,15 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         );
         assert.ok(stopRoute, "Should have admin POST route");
 
-        let resStatus = 0;
+        const response = makeAdminResponse();
         await stopRoute.handlers[stopRoute.handlers.length - 1](
             { params: { id: node.id, action: "stop" } },
-            { sendStatus: (code) => { resStatus = code; } }
+            response
         );
 
-        assert.strictEqual(resStatus, 200, "Stop endpoint should return 200");
+        assert.strictEqual(response.statusCode, 202, "Stop endpoint should return 202 accepted");
+        assert.ok(response.body.operation_id);
+        assert.equal(response.body.actual_state, RuntimeState.STOPPING);
         assert.equal(node.getRuntimeStatus().desired_state, DesiredState.STOPPED);
         assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STOPPING);
 
@@ -803,14 +864,64 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
             r => r.method === "POST" && r.path.includes(":action")
         );
 
-        let resStatus = 0;
+        const response = makeAdminResponse();
         await startRoute.handlers[startRoute.handlers.length - 1](
             { params: { id: "nonexistent-id", action: "start" } },
-            { sendStatus: (code) => { resStatus = code; } }
+            response
         );
 
-        assert.strictEqual(resStatus, 404, "Unknown node should return 404");
+        assert.strictEqual(response.statusCode, 404, "Unknown node should return 404");
+        assert.equal(response.body.error_code, "RUNTIME_NOT_FOUND");
 
+        node._onClose(false, () => {});
+    });
+
+    test("24b. Admin GET status returns the confirmed runtime state", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
+        const entry = registry.get("aiban-runtime");
+        if (!entry._instances) entry._instances = new Map();
+        entry._instances.set(node.id, node);
+
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+
+        const statusRoute = RED.httpAdmin._routes.find(
+            r => r.method === "GET" && r.path === "/aiban-runtime/:id/status"
+        );
+        assert.ok(statusRoute, "Should have admin GET status route");
+
+        const response = makeAdminResponse();
+        await statusRoute.handlers[statusRoute.handlers.length - 1](
+            { params: { id: node.id } },
+            response
+        );
+
+        assert.equal(response.statusCode, 200);
+        assert.ok(response.body.operation_id);
+        assert.equal(response.body.action, "status");
+        assert.equal(response.body.actual_state, RuntimeState.READY);
+        assert.equal(response.body.session_id, "test-session-001");
+
+        node._onClose(false, () => {});
+    });
+
+    test("24c. Admin POST rejects an invalid runtime action", async () => {
+        const { node } = await bootNode(registry, mockSpawn, { autoStart: false });
+        const entry = registry.get("aiban-runtime");
+        if (!entry._instances) entry._instances = new Map();
+        entry._instances.set(node.id, node);
+
+        const controlRoute = RED.httpAdmin._routes.find(
+            r => r.method === "POST" && r.path.includes(":action")
+        );
+        const response = makeAdminResponse();
+        await controlRoute.handlers[controlRoute.handlers.length - 1](
+            { params: { id: node.id, action: "invalid" } },
+            response
+        );
+
+        assert.equal(response.statusCode, 400);
+        assert.equal(response.body.error_code, "INVALID_RUNTIME_ACTION");
         node._onClose(false, () => {});
     });
 
@@ -898,6 +1009,82 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         proc.emit("exit", 0, null);
         await delay(100);
         assert.ok(closeDone, "Close done should be called after exit");
+    });
+
+    test("29. Message start recreates the process after it was stopped", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
+        node._stopProcess(true);
+        await delay(100);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STOPPED);
+
+        let output = null;
+        node._onInput(
+            { topic: "aiban/control", payload: { command: "start" } },
+            (messages) => { output = messages; },
+            () => {}
+        );
+        await delay(100);
+
+        assert.ok(mockSpawn.processes.length >= 2, "Message start should spawn a new process");
+        assert.ok(output && output[1], "Message start should emit an operation result");
+        assert.equal(output[1].payload.action, "start");
+        assert.equal(output[1].payload.actual_state, RuntimeState.STARTING);
+        assert.ok(output[1].payload.operation_id);
+
+        node._onClose(false, () => {});
+    });
+
+    test("30. Message restart uses process stop and queued respawn", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+
+        const stdinWrites = [];
+        proc.stdin.on("data", (chunk) => stdinWrites.push(chunk.toString()));
+        let output = null;
+        node._onInput(
+            { topic: "aiban/control", payload: { command: "restart" } },
+            (messages) => { output = messages; },
+            () => {}
+        );
+        await delay(50);
+
+        assert.ok(stdinWrites.join("").includes('"command":"stop"'));
+        assert.ok(!stdinWrites.join("").includes('"command":"restart"'));
+        assert.equal(output[1].payload.action, "restart");
+        assert.equal(output[1].payload.actual_state, RuntimeState.STOPPING);
+        assert.equal(output[1].payload.desired_state, DesiredState.READY);
+
+        proc.emit("exit", 0, null);
+        await delay(350);
+        assert.ok(mockSpawn.processes.length >= 2, "Restart should spawn a replacement process");
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STARTING);
+
+        node._onClose(false, () => {});
+    });
+
+    test("31. Message stop uses the same graceful process control path", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
+        emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
+        await delay(50);
+
+        const stdinWrites = [];
+        proc.stdin.on("data", (chunk) => stdinWrites.push(chunk.toString()));
+        let output = null;
+        node._onInput(
+            { topic: "aiban/control", payload: { command: "stop" } },
+            (messages) => { output = messages; },
+            () => {}
+        );
+        await delay(50);
+
+        assert.ok(stdinWrites.join("").includes('"command":"stop"'));
+        assert.equal(output[1].payload.action, "stop");
+        assert.equal(output[1].payload.actual_state, RuntimeState.STOPPING);
+        assert.equal(output[1].payload.desired_state, DesiredState.STOPPED);
+        assert.ok(output[1].payload.operation_id);
+
+        node._onClose(false, () => {});
     });
 
 });

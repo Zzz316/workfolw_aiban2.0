@@ -19,6 +19,7 @@
 "use strict";
 
 const { spawn: systemSpawn } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
@@ -47,9 +48,10 @@ const DEFAULT_SDK_HOME = "D:/product/AiBanWorkSpace";
 const DEFAULT_PIPELINE_CONFIG = "D:/product/AiBanWorkSpace/abvideo/main-flow.yaml";
 
 const VALID_COMMANDS = new Set([
-    "start", "stop", "restart", "health",
+    "start", "stop", "restart", "status", "health",
     "pause_source", "resume_source", "screenshot",
 ]);
+const RUNTIME_CONTROL_COMMANDS = new Set(["start", "stop", "restart", "status"]);
 
 function resolvePythonPath(configuredPath) {
     if (configuredPath && configuredPath.toLowerCase() !== "python") {
@@ -69,6 +71,25 @@ function resolvePythonPath(configuredPath) {
     return candidates.find((candidate) => fs.existsSync(candidate))
         || configuredPath
         || "python";
+}
+
+function sendAdminJson(res, statusCode, payload) {
+    if (typeof res.status === "function") {
+        const response = res.status(statusCode);
+        if (response && typeof response.json === "function") {
+            response.json(payload);
+            return;
+        }
+    }
+    if (typeof res.json === "function") {
+        res.json(payload);
+        return;
+    }
+    if (typeof res.send === "function") {
+        res.send(payload);
+        return;
+    }
+    res.sendStatus(statusCode);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +242,108 @@ module.exports = function registerAibanRuntimeNode(RED) {
         return this._runtimeController.serialize();
     };
 
+    AibanRuntimeNode.prototype._buildOperationResult = function (
+        action,
+        operationId,
+        decision,
+        options = {}
+    ) {
+        const status = this.getRuntimeStatus();
+        const failed = options.failed === true;
+        const idempotent = Boolean(decision && decision.idempotent);
+        const queued = Boolean(decision && decision.queued);
+        let acceptedStatus = "accepted";
+        if (failed) {
+            acceptedStatus = "failed";
+        } else if (idempotent) {
+            acceptedStatus = "idempotent";
+        } else if (queued) {
+            acceptedStatus = "queued";
+        }
+        return Object.freeze({
+            operation_id: operationId,
+            action,
+            accepted: !failed,
+            accepted_status: acceptedStatus,
+            idempotent,
+            queued,
+            auto_start: status.auto_start,
+            desired_state: status.desired_state,
+            actual_state: status.actual_state,
+            pid: status.pid,
+            session_id: status.session_id,
+            restart_count: status.restart_count,
+            last_error: status.last_error,
+            state_changed_at: status.last_state_at,
+            message: options.message || null,
+        });
+    };
+
+    AibanRuntimeNode.prototype.controlRuntime = function (action, options = {}) {
+        if (!RUNTIME_CONTROL_COMMANDS.has(action)) {
+            const err = new Error(`Invalid runtime action: ${action}`);
+            err.code = "INVALID_RUNTIME_ACTION";
+            throw err;
+        }
+
+        const operationId = options.operationId || randomUUID();
+        const metadata = {
+            operationId,
+            source: options.source || "unknown",
+            action,
+        };
+
+        if (action === "status") {
+            return this._buildOperationResult(action, operationId, null, {
+                message: "Current runtime state",
+            });
+        }
+
+        if (this._shutdownInitiated) {
+            return this._buildOperationResult(action, operationId, null, {
+                failed: true,
+                message: "Runtime node is shutting down",
+            });
+        }
+
+        let decision;
+        if (action === "start") {
+            if (this._process && !this._process.killed
+                && this._runtimeController.actualState === RuntimeState.ERROR) {
+                this._stopProcess(false, metadata);
+                decision = this._startProcess(true, metadata);
+            } else {
+                decision = this._startProcess(true, metadata);
+            }
+        } else if (action === "stop") {
+            decision = this._stopProcess(false, metadata);
+        } else if (action === "restart") {
+            if (!this._process || this._process.killed) {
+                decision = this._startProcess(true, metadata);
+            } else if (this._runtimeController.actualState === RuntimeState.STOPPING) {
+                decision = this._startProcess(true, metadata);
+            } else {
+                this._stopProcess(false, metadata);
+                decision = this._startProcess(true, metadata);
+            }
+        }
+
+        const status = this.getRuntimeStatus();
+        const failed = status.actual_state === RuntimeState.ERROR
+            && ["spawn_failed", "process_error"].includes(status.last_event);
+        const messages = {
+            start: "Start request accepted; wait for runtime_ready before treating it as READY",
+            stop: "Stop request accepted; wait for process exit before treating it as fully stopped",
+            restart: "Restart request accepted; the old process must exit before a new process starts",
+        };
+        return this._buildOperationResult(action, operationId, decision, {
+            failed,
+            message: failed && status.last_error
+                ? status.last_error.message
+                : messages[action],
+        });
+    };
+
     AibanRuntimeNode.prototype._openAuditLogs = function () {
         try {
             const directory = path.resolve(
@@ -366,6 +489,42 @@ module.exports = function registerAibanRuntimeNode(RED) {
             params: payload.params || {},
         };
 
+        if (RUNTIME_CONTROL_COMMANDS.has(command)) {
+            try {
+                const result = this.controlRuntime(command, {
+                    operationId: requestId,
+                    source: "node_input",
+                });
+                send([
+                    null,
+                    {
+                        topic: "aiban/status",
+                        payload: result,
+                        aiban: { runtime_id: this.id },
+                    },
+                    null,
+                ]);
+            } catch (err) {
+                this.warn(`Runtime control ${command} (${requestId}) failed: ${err.message}`);
+                send([
+                    null,
+                    null,
+                    {
+                        topic: "aiban/error",
+                        payload: {
+                            command,
+                            operation_id: requestId,
+                            ok: false,
+                            error_code: err.code || "RUNTIME_CONTROL_FAILED",
+                            error: err.message,
+                        },
+                    },
+                ]);
+            }
+            done();
+            return;
+        }
+
         this._sendCommand(cmdObj)
             .then((result) => {
                 this.log(`Command ${command} (${requestId}) succeeded: ${JSON.stringify(result)}`);
@@ -451,27 +610,28 @@ module.exports = function registerAibanRuntimeNode(RED) {
     // Process management
     // ==================================================================
 
-    AibanRuntimeNode.prototype._startProcess = function (forceAutoStart) {
-        const startDecision = this._transitionRuntime("requestStart", {
-            source: forceAutoStart === true ? "manual" : "runtime",
-        });
+    AibanRuntimeNode.prototype._startProcess = function (forceAutoStart, metadata = {}) {
+        const transitionMetadata = {
+            ...metadata,
+            source: metadata.source
+                || (forceAutoStart === true ? "manual" : "runtime"),
+        };
+        const startDecision = this._transitionRuntime("requestStart", transitionMetadata);
         if (this._process && !this._process.killed) {
             if (startDecision && startDecision.queued) {
                 this.warn("Process is stopping; start request queued");
             } else {
                 this.warn("Process already running, not starting");
             }
-            return;
+            return startDecision;
         }
         if (startDecision && startDecision.queued) {
-            return;
+            return startDecision;
         }
 
         this._sessionId = null;
         this._lastEventSeq = -1;
-        this._transitionRuntime("spawnRequested", {
-            source: forceAutoStart === true ? "manual" : "runtime",
-        });
+        this._transitionRuntime("spawnRequested", transitionMetadata);
 
         const args = [
             "-u",  // unbuffered stdout/stderr
@@ -503,8 +663,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
             this._process = this._spawnFn(this.pythonPath, args, options);
         } catch (err) {
             this.error(`Failed to spawn process: ${err.message}`);
-            this._transitionRuntime("spawnFailed", err);
-            return;
+            return this._transitionRuntime("spawnFailed", err);
         }
         const child = this._process;
         this._transitionRuntime("processSpawned", { pid: child.pid });
@@ -608,7 +767,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 this._sendCommand({
                     schema_version: SCHEMA_VERSION,
                     command: "start",
-                    request_id: `auto-start-${Date.now()}`,
+                    request_id: metadata.operationId || `auto-start-${Date.now()}`,
                     params: {},
                 }).catch((err) => {
                     this.warn(`Auto-start failed: ${err.message}`);
@@ -655,14 +814,16 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 }
             }, this.startupTimeoutMs);
         }
+        return startDecision;
     };
 
-    AibanRuntimeNode.prototype._stopProcess = function (force) {
-        this._transitionRuntime("requestStop", {
-            source: force ? "forced" : "runtime",
+    AibanRuntimeNode.prototype._stopProcess = function (force, metadata = {}) {
+        const stopDecision = this._transitionRuntime("requestStop", {
+            ...metadata,
+            source: metadata.source || (force ? "forced" : "runtime"),
         });
         if (!this._process || this._process.killed) {
-            return;
+            return stopDecision;
         }
 
         const child = this._process;
@@ -670,14 +831,14 @@ module.exports = function registerAibanRuntimeNode(RED) {
         if (force) {
             this.log("Force killing Python process");
             child.kill("SIGKILL");
-            return;
+            return stopDecision;
         }
 
         // Send stop command for graceful shutdown
         this._sendCommand({
             schema_version: SCHEMA_VERSION,
             command: "stop",
-            request_id: `stop-${Date.now()}`,
+            request_id: metadata.operationId || `stop-${Date.now()}`,
             params: { force: false },
         }).catch(() => {
             // If command fails, force kill
@@ -698,6 +859,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 child.kill("SIGKILL");
             }
         }, this.shutdownTimeoutMs);
+        return stopDecision;
     };
 
     // ==================================================================
@@ -1421,6 +1583,24 @@ module.exports = function registerAibanRuntimeNode(RED) {
         }
     );
 
+    RED.httpAdmin.get(
+        "/aiban-runtime/:id/status",
+        RED.auth.needsPermission("aiban-runtime.read"),
+        function getRuntimeStatus(req, res) {
+            const node = RED.nodes.getNode(req.params.id);
+            if (!node) {
+                sendAdminJson(res, 404, {
+                    error_code: "RUNTIME_NOT_FOUND",
+                    message: `Runtime node not found: ${req.params.id}`,
+                });
+                return;
+            }
+            sendAdminJson(res, 200, node.controlRuntime("status", {
+                source: "http_status",
+            }));
+        }
+    );
+
     RED.httpAdmin.post(
         "/aiban-runtime/:id/:action",
         RED.auth.needsPermission("aiban-runtime.write"),
@@ -1428,21 +1608,40 @@ module.exports = function registerAibanRuntimeNode(RED) {
             const node = RED.nodes.getNode(req.params.id);
             const action = req.params.action;
             if (!node) {
-                res.sendStatus(404);
+                sendAdminJson(res, 404, {
+                    error_code: "RUNTIME_NOT_FOUND",
+                    message: `Runtime node not found: ${req.params.id}`,
+                });
                 return;
             }
-            if (action === "start") {
-                const wasStopping = node._runtimeController.actualState === RuntimeState.STOPPING;
-                node._startProcess(true);
-                res.sendStatus(wasStopping ? 202 : 200);
+            if (!["start", "stop", "restart"].includes(action)) {
+                sendAdminJson(res, 400, {
+                    error_code: "INVALID_RUNTIME_ACTION",
+                    message: `Invalid runtime action: ${action}`,
+                });
                 return;
             }
-            if (action === "stop") {
-                node._stopProcess(false);
-                res.sendStatus(200);
-                return;
+            try {
+                const result = node.controlRuntime(action, {
+                    source: "http_admin",
+                });
+                let statusCode = 200;
+                if (!result.accepted) {
+                    statusCode = 500;
+                } else if ([
+                    RuntimeState.STARTING,
+                    RuntimeState.STOPPING,
+                    RuntimeState.RECOVERING,
+                ].includes(result.actual_state)) {
+                    statusCode = 202;
+                }
+                sendAdminJson(res, statusCode, result);
+            } catch (err) {
+                sendAdminJson(res, err.code === "INVALID_RUNTIME_ACTION" ? 400 : 500, {
+                    error_code: err.code || "RUNTIME_CONTROL_FAILED",
+                    message: err.message,
+                });
             }
-            res.sendStatus(400);
         }
     );
 

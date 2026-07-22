@@ -1,6 +1,6 @@
-# AiBan Runtime Protocol v1.1
+# AiBan Runtime Protocol v1.2
 
-> 文档版本：v1.1<br>
+> 文档版本：v1.2<br>
 > 编制日期：2026-07-02<br>
 > 更新日期：2026-07-22<br>
 > 协议版本：`schema_version: 1`
@@ -59,6 +59,47 @@ JSONL 事件协议和 Node-RED 控制面状态是两个层次。`aiban-runtime` 
 3. 在 `STOPPING` 期间收到 start，只更新 `desired_state=READY` 并等待旧进程退出，不能伪造 READY。
 4. PID 只能由 spawn/exit 事件更新；`runtime_ready` 只能确认 SDK/Pipeline 已就绪。
 5. 编辑器状态颜色是 `actual_state` 的投影，不是状态事实来源。
+
+### 1.2 统一控制入口
+
+以下入口统一调用 Node-RED 节点实例的 `controlRuntime()`，不能绕过进程管理直接伪造状态：
+
+| 入口 | 调用方式 |
+|---|---|
+| 编辑器按钮 | 先 GET 状态，再 POST `start/stop/restart` |
+| 管理 HTTP | `GET /aiban-runtime/:id/status`；`POST /aiban-runtime/:id/:action` |
+| Node-RED 输入 | `msg.topic="aiban/control"`，`msg.payload.command` 为 `start/stop/restart/status` |
+
+生命周期操作返回统一结果：
+
+```json
+{
+  "operation_id": "uuid-or-request-id",
+  "action": "start",
+  "accepted": true,
+  "accepted_status": "accepted",
+  "idempotent": false,
+  "queued": false,
+  "auto_start": false,
+  "desired_state": "READY",
+  "actual_state": "STARTING",
+  "pid": 12345,
+  "session_id": null,
+  "restart_count": 0,
+  "last_error": null,
+  "state_changed_at": "2026-07-22T10:00:00.000Z",
+  "message": "Start request accepted; wait for runtime_ready before treating it as READY"
+}
+```
+
+语义约束：
+
+- HTTP `202` 表示生命周期操作已接收但仍处于 `STARTING/STOPPING/RECOVERING`，不表示 READY。
+- HTTP `200` 表示状态读取成功，或目标状态已满足/请求为幂等操作。
+- `accepted_status` 为 `accepted`、`queued`、`idempotent` 或 `failed`。
+- `STARTING/STOPPING/RECOVERING` 时编辑器禁用重复操作；其他入口的重复请求返回幂等或排队结果。
+- 外部 `restart` 由 Node-RED 停止旧进程并在退出后重新 spawn；不得把 Python 进程内 `restart` 作为生产控制路径。
+- `health`、`pause_source`、`resume_source` 和 `screenshot` 仍是发送给当前 Python Runner 的进程内命令。
 
 ---
 
@@ -387,7 +428,7 @@ SDK 自身产生的事件（来自 `registerVideoMsgEventFunc` 回调）。
 }
 ```
 
-等价于 `stop` → 等待停止完成 → `start`。
+该命令是 Python Runner 的进程内兼容命令，等价于 `stop` → 等待停止完成 → `start`。生产环境的编辑器、HTTP 和 Node-RED 输入 restart 使用 1.2 节所述的进程级重启，不直接发送此命令。
 
 ### 4.4 `health` — 健康检查
 
