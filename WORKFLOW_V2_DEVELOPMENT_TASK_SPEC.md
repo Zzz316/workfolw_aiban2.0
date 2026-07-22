@@ -1,6 +1,6 @@
 # AiBan Workflow 2.0 开发任务说明书
 
-> 文档版本：v1.0.1<br>
+> 文档版本：v1.0.2<br>
 > 更新日期：2026-07-22<br>
 > 上位计划：[`WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md`](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md)<br>
 > 使用方式：每次只领取一个主任务；开始前核对依赖，结束时按验收标准提交证据。
@@ -74,7 +74,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 - 产品确认、现场 SDK、摄像头、MySQL 和外部接口能够按任务窗口提供。
 - 日期未扣除法定节假日、请假和外部等待时间。
 - “剩余人日”已经考虑现有代码的可复用程度，不是从零开发的总人日。
-- T00 完成后剩余基准串行计划为 102 人日，功能和发布任务计划完成日仍为 2026-12-15。
+- T01 完成后剩余基准串行计划为 99 人日，功能和发布任务计划完成日仍为 2026-12-15。
 - 另保留约 15% 风险缓冲，管理目标完成日为 2026-12-31。
 
 如果投入 2 名开发并提供独立测试/现场支持，T01～T04 与 T05～T08、T09～T10 与 T11～T12 可以并行，预计可将总日历周期缩短到约 16 周；不得通过并行跳过共同协议门禁。
@@ -106,8 +106,8 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 
 ### 2.4 当前总体判断
 
-- 项目整体成熟度：约 **36%（±5%）**。
-- 单 Runtime + 单线性顺序场景：约 **70%**。
+- 项目整体成熟度：约 **38%（±5%）**。
+- 单 Runtime + 单线性顺序场景：约 **74%**。
 - 多 group、多 scene 平台能力：约 **10%**。
 - 1.0 全业务功能对等迁移：约 **20%**。
 - 生产发布成熟度：约 **15%**。
@@ -119,7 +119,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 | 模块 | 对应任务 | 当前进度 | 当前证据 | 主要缺口 | 剩余人日 | 基准周期 | 计划结束 |
 |---|---|---:|---|---|---:|---|---|
 | M0 基线与文档 | T00 | 100% | 91/91 全量测试、30/30 Phase 2、基线报告及状态文档已完成 | 无 | 0 | 07-23～07-24；实际 07-22 | 07-22 |
-| M1 Runtime 生命周期 | T01～T04 | 70% | spawn、stdin/stdout、启停、心跳和大量测试已存在 | 状态模型、统一入口、restart、真实 Windows 回收 | 11 | 07-27～08-10 | 08-10 |
+| M1 Runtime 生命周期 | T01～T04 | 78% | 六态 RuntimeController、PID/session/error/restart 状态及 107 项回归已完成 | 统一入口、restart、真实 Windows 回收 | 8 | 07-27～08-10 | 08-10 |
 | M2 结果协议与分层 | T05～T08 | 55% | 线性 FlowRuntime、OK/NG/TIMEOUT、审计和截图已存在 | outcome 契约、双模式结果、复杂逻辑入口 | 13 | 08-11～08-27 | 08-27 |
 | M3 Group 元数据 | T09～T10 | 10% | 已有 pipelineConfig 和临时 ready 字段 | YAML 权威解析、真实 group/source/model | 5 | 08-28～09-03 | 09-03 |
 | M3 Scene Registry/前端 | T11～T13 | 20% | scene-manager localStorage Demo 已存在 | 后端存储、API、权限、真实启停和冲突处理 | 12 | 09-04～09-21 | 09-21 |
@@ -157,9 +157,9 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 | ID | 任务 | P | 当前完成度 | 状态 | 剩余人日 | 计划日期 | 依赖 | 现有基础/进度说明 |
 |---|---|---:|---:|---|---:|---|---|---|
 | T00 | 冻结当前基线并校正文档状态 | P0 | 100% | DONE | 0 | 计划 07-23～07-24；实际 07-22 | 无 | 基线、测试、真实证据和状态文档已统一 |
-| T01 | 建立 RuntimeController 与真实状态模型 | P0 | 20% | READY | 3 | 07-27～07-29 | T00 | 当前有分散状态字段，尚无独立控制器 |
-| T02 | 统一按钮、HTTP 和消息控制入口 | P0 | 35% | TODO | 3 | 07-30～08-03 | T01 | 按钮和 HTTP 已存在，但无统一状态查询/反馈 |
-| T03 | 修复 restart 与进程回收 | P0 | 35% | TODO | 2 | 08-04～08-05 | T01 | stop/重启测试已有，restart 持续存活断言缺失 |
+| T01 | 建立 RuntimeController 与真实状态模型 | P0 | 100% | DONE | 0 | 计划 07-27～07-29；实际 07-22 | T00 | 提交 `aea6e9a`；六态模型和 16 项独立控制器测试完成 |
+| T02 | 统一按钮、HTTP 和消息控制入口 | P0 | 35% | READY | 3 | 07-30～08-03 | T01 | 按钮和 HTTP 已存在，但无统一状态查询/反馈 |
+| T03 | 修复 restart 与进程回收 | P0 | 35% | READY | 2 | 08-04～08-05 | T01 | stop/重启测试已有，restart 持续存活断言缺失 |
 | T04 | 生命周期故障矩阵与 Windows 验收 | P0 | 30% | TODO | 3 | 08-06～08-10 | T02、T03 | 自动化覆盖较多，现场回收矩阵和运维证据不足 |
 | T05 | 冻结 workflow outcome/result 契约 | P0 | 20% | READY | 2 | 08-11～08-12 | T00 | 已有 abc_result，但无通用 outcome 契约；按主线顺序暂不领取 |
 | T06 | 提取线性顺序引擎公共边界 | P0 | 50% | TODO | 3 | 08-13～08-17 | T05 | FlowRuntime 已在 lib 中，但仍与 result 行为绑定 |
@@ -277,6 +277,14 @@ npm.cmd test
 - spawn error 和 startup timeout。
 
 **依赖**：T00。
+
+**完成记录（2026-07-22）**
+
+- 新增独立 `lib/runtime-controller.js`，实现六态状态机和只读状态序列化。
+- Node-RED 节点由 spawn、Runner 事件、超时和退出事件驱动实际状态；只有 `runtime_ready` 可以进入 READY。
+- 手动 start/stop 不再修改 `autoStart` 配置策略，重复请求保持幂等。
+- 新增 16 项控制器单元测试，并在 28 项节点集成测试中增加状态断言。
+- 全量回归 107 / 107 通过；功能提交为 `aea6e9a`。
 
 ---
 
@@ -1006,13 +1014,13 @@ scene-entry
 
 ## 15. 当前首批任务包
 
-首批只领取以下任务，不提前开发 Scene Router。T00 已完成，当前主任务为 T01：
+首批只领取以下任务，不提前开发 Scene Router。T00、T01 已完成，当前主任务为 T02：
 
 ```text
 T00 基线与文档（DONE）
-  → T01 RuntimeController（READY）
-  → T02 统一控制入口
-  → T03 restart/进程回收
+  → T01 RuntimeController（DONE）
+  → T02 统一控制入口（READY）
+  → T03 restart/进程回收（READY）
   → T04 生命周期验收
 
 T00（DONE）

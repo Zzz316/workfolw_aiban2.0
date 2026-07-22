@@ -2,7 +2,7 @@
 
 > AiBan 智能视频分析平台工作流引擎 2.0。<br>
 > Node-RED 是运行入口和业务编排引擎，Python Runner 只负责 AiBan SDK 与进程协议适配。<br>
-> 当前阶段：完成单 Runtime + 单线性顺序闭环基线，正在执行 M0/M1（基线校正与 Runtime 生命周期稳定化）。
+> 当前阶段：M0 已完成，M1 Runtime 生命周期稳定化正在执行；T01 RuntimeController 已交付。
 
 ## 当前状态
 
@@ -11,12 +11,13 @@
 - Node-RED 可以直接启动 Python Runner 和 AiBan Pipeline。
 - stdin/stdout JSON Lines 帧通道、心跳、错误、截图和 source 控制已实现。
 - `aiban-label → aiban-result → aiban-result-db` 线性顺序闭环已实现。
-- 全量自动化测试 `91/91` 通过；Phase 2 专项测试 `30/30` 通过。
+- 全量自动化测试 `107/107` 通过；Phase 2 专项测试 `30/30` 通过。
+- Runtime 状态已统一为 `STOPPED/STARTING/READY/STOPPING/ERROR/RECOVERING`，spawn 成功不再等同于 READY。
 - 2026-07-22 本地日志记录了真实 `group-1/source-1` 模型帧进入 Node-RED。
 - 真实 SDK 端到端 OK/NG、真实 MySQL 成功写入、24 小时稳定性仍需按正式测试矩阵验收。
 - Scene Manager 当前是 localStorage Demo，正式 Registry API 和 scene router 尚未实现。
 
-项目整体工程成熟度估算约为 36%（±5%）。这里的完成度同时考虑代码、自动化、真实环境、文档和验收，不是代码行比例。
+项目整体工程成熟度估算约为 38%（±5%）。这里的完成度同时考虑代码、自动化、真实环境、文档和验收，不是代码行比例。
 
 详细进度见：
 
@@ -70,7 +71,7 @@ Node-RED aiban-runtime
 | Source pause/resume | 单 group/source | `sourceControl()`，用于过载和运维 |
 | Scene enable/disable/select | 单业务场景 | 只控制业务路由，不停止 SDK |
 
-当前 Runtime 按钮已经能够调用启停接口，但按钮显示状态、统一控制入口和 restart 持续存活仍在 T01～T04 中完善。
+RuntimeController 已完成；按钮真实状态查询、三类控制入口统一、restart 持续存活和 Windows 回收仍在 T02～T04 中完善。
 
 ## 目录概览
 
@@ -141,7 +142,7 @@ npx.cmd node-red --settings settings.js
 ```powershell
 cd node-red-contrib-aiban-workflow
 
-# 全量：2026-07-22 基线为 91/91
+# 全量：M0 基线 91/91；T01 完成后 107/107
 npm.cmd test
 
 # Python Runner 生命周期专项
@@ -160,8 +161,8 @@ Mock 测试不能代替真实 SDK、真实 MySQL 和现场稳定性验证。
 
 | 里程碑 | 内容 | 当前状态 |
 |---|---|---|
-| M0 | 基线冻结与文档校正 | 进行中 |
-| M1 | Runtime 生命周期稳定化 | 待开发，已有约 70% 可复用基础 |
+| M0 | 基线冻结与文档校正 | 已完成，标签 `workflow-v2-m0-baseline` |
+| M1 | Runtime 生命周期稳定化 | 进行中，T01 已完成，模块约 78% |
 | M2 | outcome/result 协议与组件分层 | 待开发，已有线性结果基础 |
 | M3 | 真实 group 元数据与 Scene Registry | 待开发，已有前端 Demo |
 | M4 | Scene Router 与首场景子流程 | 待开发 |
