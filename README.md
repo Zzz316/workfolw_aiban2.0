@@ -2,7 +2,7 @@
 
 > AiBan 智能视频分析平台工作流引擎 2.0。<br>
 > Node-RED 是运行入口和业务编排引擎，Python Runner 只负责 AiBan SDK 与进程协议适配。<br>
-> 当前阶段：M0 已完成，M1 Runtime 生命周期稳定化正在执行；T01～T03 已交付。
+> 当前阶段：M0、M1 已完成；按用户要求暂停，下一任务为 T05 outcome/result 契约。
 
 ## 当前状态
 
@@ -11,14 +11,15 @@
 - Node-RED 可以直接启动 Python Runner 和 AiBan Pipeline。
 - stdin/stdout JSON Lines 帧通道、心跳、错误、截图和 source 控制已实现。
 - `aiban-label → aiban-result → aiban-result-db` 线性顺序闭环已实现。
-- 全量自动化测试 `118/118` 通过；Phase 2 专项测试 `30/30` 通过。
+- 全量自动化测试 `125/125` 通过；Phase 2 专项测试 `30/30` 通过。
 - Runtime 状态已统一为 `STOPPED/STARTING/READY/STOPPING/ERROR/RECOVERING`，编辑器、HTTP 和消息入口共用真实状态控制。
 - Python 兼容型 restart 在新 session 中持续运行；生产 restart 等待旧 PID 退出后只拉起一个替换进程。
+- Windows 真 Python 子进程 restart、节点删除回收及测试前后 0 孤儿进程已通过 T04 验收。
 - 2026-07-22 本地日志记录了真实 `group-1/source-1` 模型帧进入 Node-RED。
 - 真实 SDK 端到端 OK/NG、真实 MySQL 成功写入、24 小时稳定性仍需按正式测试矩阵验收。
 - Scene Manager 当前是 localStorage Demo，正式 Registry API 和 scene router 尚未实现。
 
-项目整体工程成熟度估算约为 42%（±5%）。这里的完成度同时考虑代码、自动化、真实环境、文档和验收，不是代码行比例。
+项目整体工程成熟度估算约为 43%（±5%）。这里的完成度同时考虑代码、自动化、真实环境、文档和验收，不是代码行比例。
 
 详细进度见：
 
@@ -72,7 +73,7 @@ Node-RED aiban-runtime
 | Source pause/resume | 单 group/source | `sourceControl()`，用于过载和运维 |
 | Scene enable/disable/select | 单业务场景 | 只控制业务路由，不停止 SDK |
 
-RuntimeController、按钮真实状态查询、三类控制入口和 restart 持续存活已完成；真实 Windows 故障/回收全矩阵在 T04 验收。
+RuntimeController、按钮真实状态查询、三类控制入口、restart 持续存活和 Windows 故障/回收矩阵已完成。
 
 ## 目录概览
 
@@ -143,7 +144,7 @@ npx.cmd node-red --settings settings.js
 ```powershell
 cd node-red-contrib-aiban-workflow
 
-# 全量：M0 基线 91/91；T01 107/107；T02 116/116；T03 完成后 118/118
+# 全量：M0 91/91；T01 107/107；T02 116/116；T03 118/118；T04 125/125
 npm.cmd test
 
 # Python Runner 生命周期专项
@@ -163,7 +164,7 @@ Mock 测试不能代替真实 SDK、真实 MySQL 和现场稳定性验证。
 | 里程碑 | 内容 | 当前状态 |
 |---|---|---|
 | M0 | 基线冻结与文档校正 | 已完成，标签 `workflow-v2-m0-baseline` |
-| M1 | Runtime 生命周期稳定化 | 进行中，T01～T03 已完成，模块约 94% |
+| M1 | Runtime 生命周期稳定化 | 已完成，T01～T04 100%，标签 `workflow-v2-m1-runtime` |
 | M2 | outcome/result 协议与组件分层 | 待开发，已有线性结果基础 |
 | M3 | 真实 group 元数据与 Scene Registry | 待开发，已有前端 Demo |
 | M4 | Scene Router 与首场景子流程 | 待开发 |
@@ -184,6 +185,7 @@ Mock 测试不能代替真实 SDK、真实 MySQL 和现场稳定性验证。
 | [docs/WORKFLOW_1_0_PARITY_MATRIX.md](docs/WORKFLOW_1_0_PARITY_MATRIX.md) | 1.0 功能迁移事实矩阵 |
 | [docs/REAL_SDK_TEST.md](docs/REAL_SDK_TEST.md) | 真实 SDK 测试步骤 |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | 运维和故障恢复 |
+| [docs/RUNTIME_LIFECYCLE_MATRIX.md](docs/RUNTIME_LIFECYCLE_MATRIX.md) | T04 故障矩阵与 Windows 验收证据 |
 | [docs/LEGACY_ZMQ_MIGRATION.md](docs/LEGACY_ZMQ_MIGRATION.md) | 旧 ZMQ 代码处置策略 |
 
 ## 发布限制
