@@ -109,11 +109,11 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 
 ### 5.3 当前已知限制
 
-T01～T04 完成前：
+T04 完成前：
 
-- 编辑器按钮使用的显示状态可能与 Pipeline 实际状态短暂不一致。
+- 编辑器按钮与 RuntimeController 已统一，但仍需现场页面人工复核。
 - HTTP 控制请求被接收不等于已经到达 `READY/STOPPED`。
-- restart 自动化测试尚未证明第二次 ready 后 Runner 长时间持续存活。
+- restart 自动化已证明第二次 ready、新 session、后续帧和观察窗口存活；真实 SDK 完整重启/回收矩阵尚未验收。
 
 因此当前真实测试必须以生命周期事件、进程状态和日志共同判断，不能只看按钮颜色。
 
