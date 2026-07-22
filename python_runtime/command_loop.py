@@ -55,6 +55,10 @@ class CommandLoop:
         """Register a handler for a control command."""
         self._handlers[command] = handler
 
+    def set_session_id(self, session_id: str) -> None:
+        """Update the session used by future command_result events."""
+        self._session_id = session_id
+
     # ------------------------------------------------------------------
     # Dispatch
     # ------------------------------------------------------------------

@@ -76,12 +76,22 @@ function makeFrameEvent(overrides = {}) {
 }
 
 function makeReadyEvent(overrides = {}) {
+    const {
+        event_seq = 0,
+        session_id = "test-session-001",
+        ...payloadOverrides
+    } = overrides;
     return {
         schema_version: 1, type: "runtime_ready",
-        session_id: "test-session-001", event_id: "evt-ready",
-        event_seq: overrides.event_seq !== undefined ? overrides.event_seq : 0,
+        session_id, event_id: "evt-ready",
+        event_seq,
         emitted_at: new Date().toISOString(),
-        payload: { groups: [1], sources_per_group: {"1": [1]}, models_loaded: ["1"], ...overrides },
+        payload: {
+            groups: [1],
+            sources_per_group: {"1": [1]},
+            models_loaded: ["1"],
+            ...payloadOverrides,
+        },
     };
 }
 
@@ -982,6 +992,12 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         assert.ok(hbStatus, "Should have heartbeat lost status");
         assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.ERROR);
         assert.equal(node.getRuntimeStatus().last_error.code, "HEARTBEAT_TIMEOUT");
+        const forceKillLog = node._logs.find(entry =>
+            entry.msg && entry.msg.includes("reason=heartbeat_timeout")
+        );
+        assert.ok(forceKillLog, "Forced timeout cleanup should be audited");
+        assert.ok(forceKillLog.msg.includes(`pid=${proc.pid}`));
+        assert.match(forceKillLog.msg, /operation_id=heartbeat-\d+/);
 
         node._onClose(false, () => {});
     });
@@ -1034,6 +1050,39 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         node._onClose(false, () => {});
     });
 
+    test("29b. Queued start never overlaps a force-killed process awaiting exit", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
+        proc.kill = function holdExit(signal) {
+            this.killed = true;
+            this.signalCode = signal || "SIGTERM";
+            this.exitCode = -1;
+            return true;
+        };
+
+        node._stopProcess(true, {
+            operationId: "op-held-exit",
+            reason: "test_force_stop",
+        });
+        const result = node.controlRuntime("start", {
+            operationId: "op-queued-start",
+            source: "test",
+        });
+
+        assert.equal(result.queued, true);
+        assert.equal(node.getRuntimeStatus().desired_state, DesiredState.READY);
+        assert.equal(mockSpawn.processes.length, 1, "No replacement may spawn before exit");
+
+        proc.emit("exit", -1, "SIGKILL");
+        await delay(350);
+        assert.equal(mockSpawn.processes.length, 2, "Replacement should spawn after exit");
+        const activeProcesses = mockSpawn.processes.filter(candidate =>
+            candidate !== proc && candidate.exitCode === null && !candidate.killed
+        );
+        assert.equal(activeProcesses.length, 1);
+
+        node._onClose(false, () => {});
+    });
+
     test("30. Message restart uses process stop and queued respawn", async () => {
         const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
         emitEvent(proc, makeReadyEvent({ event_seq: 0 }));
@@ -1055,10 +1104,39 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         assert.equal(output[1].payload.actual_state, RuntimeState.STOPPING);
         assert.equal(output[1].payload.desired_state, DesiredState.READY);
 
+        emitEvent(proc, {
+            schema_version: 1,
+            type: "runtime_stopped",
+            session_id: "test-session-001",
+            event_id: "evt-stopped",
+            event_seq: 1,
+            emitted_at: new Date().toISOString(),
+            payload: { reason: "command", exit_code: 0, frames_emitted: 1 },
+        });
+        await delay(25);
+        proc.exitCode = 0;
         proc.emit("exit", 0, null);
         await delay(350);
         assert.ok(mockSpawn.processes.length >= 2, "Restart should spawn a replacement process");
         assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.STARTING);
+
+        const replacement = mockSpawn.processes.at(-1);
+        assert.notEqual(replacement.pid, proc.pid, "Replacement must use a new PID");
+        const activeProcesses = mockSpawn.processes.filter(candidate =>
+            candidate.exitCode === null && !candidate.killed
+        );
+        assert.deepEqual(activeProcesses, [replacement], "Only one replacement process may remain");
+
+        emitEvent(replacement, makeReadyEvent({
+            event_seq: 0,
+            session_id: "test-session-002",
+        }));
+        await delay(50);
+        assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.READY);
+        assert.equal(node.getRuntimeStatus().pid, replacement.pid);
+        assert.equal(node.getRuntimeStatus().session_id, "test-session-002");
+        assert.equal(replacement.exitCode, null, "Replacement should remain alive");
+        assert.equal(replacement.killed, false, "Replacement should not be killed");
 
         node._onClose(false, () => {});
     });

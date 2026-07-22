@@ -84,6 +84,23 @@ function sendCommand(proc, command, requestId, params) {
     proc.stdin.write(JSON.stringify(cmd) + "\n");
 }
 
+function waitForExit(proc, timeoutMs = 3000) {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+        return Promise.resolve({ code: proc.exitCode, signal: proc.signalCode });
+    }
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            proc.removeListener("exit", onExit);
+            reject(new Error(`Process did not exit within ${timeoutMs}ms`));
+        }, timeoutMs);
+        function onExit(code, signal) {
+            clearTimeout(timer);
+            resolve({ code, signal });
+        }
+        proc.once("exit", onExit);
+    });
+}
+
 function collectStderr(proc) {
     const lines = [];
     const rl = readline.createInterface({ input: proc.stderr, crlfDelay: Infinity });
@@ -251,6 +268,11 @@ describe("aiban-runtime Phase 1", { concurrency: 1 }, () => {
             stopped = extra.find(e => e.type === "runtime_stopped");
         }
         assert.ok(stopped, "Should have runtime_stopped event");
+
+        const stopResult = events.find(e =>
+            e.type === "command_result" && e.payload.request_id === "t6-stop"
+        );
+        assert.ok(stopResult && stopResult.payload.ok, "Stop result should flush before exit");
     });
 
     // === Test 7: Health command ===
@@ -709,27 +731,80 @@ describe("aiban-runtime Phase 1", { concurrency: 1 }, () => {
 
     test("25. Restart command stops and starts pipeline successfully", async () => {
         const proc = spawnRunner(["--labels", "A", "--frame-interval", "100"]);
-        const eventPromise = readEvents(proc, 8000);
+        const eventPromise = readEvents(proc, 6000);
 
-        // Start → wait → restart
-        sendCommand(proc, "start", "t25-start");
-        await new Promise(r => setTimeout(r, 1500));
-        sendCommand(proc, "restart", "t25-restart");
+        try {
+            // Start → wait → in-process compatibility restart → health check.
+            sendCommand(proc, "start", "t25-start");
+            await new Promise(r => setTimeout(r, 1500));
+            sendCommand(proc, "restart", "t25-restart");
+            await new Promise(r => setTimeout(r, 1000));
+            sendCommand(proc, "health", "t25-health-after-restart");
 
-        const events = await eventPromise;
-        proc.kill();
+            const events = await eventPromise;
+            const readyIndexes = events
+                .map((event, index) => event.type === "runtime_ready" ? index : -1)
+                .filter(index => index >= 0);
+            assert.ok(
+                readyIndexes.length >= 2,
+                `Should receive two runtime_ready events, got ${readyIndexes.length}`
+            );
 
-        // Should have runtime_stopped from the stop phase of restart
-        const stopped = events.find(e => e.type === "runtime_stopped");
-        assert.ok(stopped, "Should have runtime_stopped from restart");
+            const firstReady = events[readyIndexes[0]];
+            const secondReady = events[readyIndexes[1]];
+            assert.notStrictEqual(
+                secondReady.session_id,
+                firstReady.session_id,
+                "Restart must create a new protocol session"
+            );
 
-        // Should have at least one runtime_ready (from either start or restart)
-        const readyEvents = events.filter(e => e.type === "runtime_ready");
-        assert.ok(readyEvents.length >= 1, `Should have runtime_ready, got ${readyEvents.length}`);
+            const restartStop = events.find(event =>
+                event.type === "runtime_stopped"
+                && event.payload.reason === "restart"
+            );
+            assert.ok(restartStop, "Restart should gracefully stop the old pipeline");
 
-        // Should have frames after restart
-        const frames = events.filter(e => e.type === "frame");
-        assert.ok(frames.length > 0, "Should have frames");
+            const framesAfterSecondReady = events.slice(readyIndexes[1] + 1).filter(event =>
+                event.type === "frame"
+                && event.session_id === secondReady.session_id
+            );
+            assert.ok(
+                framesAfterSecondReady.length > 0,
+                "New session should continue emitting frames after the second ready event"
+            );
+
+            const restartResult = events.find(event =>
+                event.type === "command_result"
+                && event.payload.request_id === "t25-restart"
+            );
+            assert.ok(restartResult && restartResult.payload.ok, "Restart command should succeed");
+            assert.strictEqual(restartResult.session_id, secondReady.session_id);
+            assert.strictEqual(
+                restartResult.payload.result.session_id,
+                secondReady.session_id
+            );
+
+            const healthResult = events.find(event =>
+                event.type === "command_result"
+                && event.payload.request_id === "t25-health-after-restart"
+            );
+            assert.ok(healthResult && healthResult.payload.ok, "Runner should answer after restart");
+            assert.strictEqual(healthResult.payload.result.state, "ready");
+            assert.strictEqual(healthResult.session_id, secondReady.session_id);
+
+            assert.strictEqual(proc.exitCode, null, "Runner must remain alive after restart");
+            assert.strictEqual(proc.signalCode, null, "Runner must not be terminating after restart");
+            assert.strictEqual(proc.killed, false, "Test has not killed the live Runner");
+
+            const exitPromise = waitForExit(proc);
+            sendCommand(proc, "stop", "t25-final-stop");
+            const exit = await exitPromise;
+            assert.strictEqual(exit.code, 0, "Final graceful stop should exit cleanly");
+        } finally {
+            if (proc.exitCode === null && proc.signalCode === null) {
+                proc.kill();
+            }
+        }
     });
 
     // === Test 26: Pause and resume source commands ===
@@ -798,4 +873,3 @@ describe("aiban-runtime Phase 1", { concurrency: 1 }, () => {
     });
 
 });
-

@@ -123,9 +123,9 @@ JSONL 事件协议和 Node-RED 控制面状态是两个层次。`aiban-runtime` 
 |------|------|------|------|
 | `schema_version` | int | 是 | 协议版本，当前为 `1` |
 | `type` | string | 是 | 事件类型，见第 3 节 |
-| `session_id` | string | 是 | Runner 实例标识（UUID v4），进程存活期间不变 |
+| `session_id` | string | 是 | 协议会话标识（UUID v4）；新进程或兼容型进程内 Pipeline restart 都会创建新会话 |
 | `event_id` | string | 是 | 事件唯一标识（UUID v4） |
-| `event_seq` | int | 是 | 单调递增序号，从 `0` 开始，用于检测丢事件 |
+| `event_seq` | int | 是 | 当前 `session_id` 内单调递增的序号，从 `0` 开始，用于检测丢事件 |
 | `emitted_at` | string | 是 | 事件生成时刻（ISO 8601，含时区） |
 | `payload` | object | 是 | 事件类型相关的负载数据 |
 
@@ -290,7 +290,7 @@ SDK 配置校验成功、Pipeline 已启动，可以接收推理帧。
 
 #### `runtime_stopped`
 
-进程已完全退出（在 `stopPipline()` 之后）。
+Pipeline 已在 `stopPipline()` 之后完全停止。最终 stop 会在命令结果写出后结束 Runner；兼容型进程内 restart 会保留 Runner，并用新 `session_id` 再次启动 Pipeline。
 
 ```json
 {
@@ -402,7 +402,7 @@ SDK 自身产生的事件（来自 `registerVideoMsgEventFunc` 回调）。
 
 仅在收到 `runtime_starting` 后有效。Python 执行 SDK 初始化和 `buildPipline()`。
 
-### 4.2 `stop` — 停止 Pipeline
+### 4.2 `stop` — 停止 Pipeline 并结束 Runner
 
 ```json
 {
@@ -415,7 +415,9 @@ SDK 自身产生的事件（来自 `registerVideoMsgEventFunc` 回调）。
 
 | params 字段 | 类型 | 说明 |
 |------|------|------|
-| `force` | bool | `true` 则跳过优雅退出，直接终止 |
+| `force` | bool | `true` 表示即使 `stopPipline()` 抛错也继续 Runner 清理；操作系统级强制终止由 Node-RED 超时路径负责 |
+
+Runner 会先调用 SDK `stopPipline()`，发出 `runtime_stopping` 和 `runtime_stopped`，写出 `command_result`，最后退出进程。stdin EOF、进程信号和 Node-RED 关闭同样先执行 Pipeline 清理。
 
 ### 4.3 `restart` — 重启 Pipeline
 
@@ -428,7 +430,9 @@ SDK 自身产生的事件（来自 `registerVideoMsgEventFunc` 回调）。
 }
 ```
 
-该命令是 Python Runner 的进程内兼容命令，等价于 `stop` → 等待停止完成 → `start`。生产环境的编辑器、HTTP 和 Node-RED 输入 restart 使用 1.2 节所述的进程级重启，不直接发送此命令。
+该命令是 Python Runner 的进程内兼容命令：只停止 Pipeline，不设置 Runner 的最终退出事件；停止完成后创建新的 `session_id`、把 `event_seq` 重置为 `0`，再启动 Pipeline。生产环境的编辑器、HTTP 和 Node-RED 输入 restart 使用 1.2 节所述的进程级重启，不直接发送此命令。
+
+生产进程级 restart 必须等待旧 PID 的 `exit` 事件后才能 spawn 新进程。发送 `SIGKILL` 只代表已请求终止，不能作为旧进程已经退出的依据。超时强制终止日志必须包含 `operation_id`、PID、原因和信号。
 
 ### 4.4 `health` — 健康检查
 

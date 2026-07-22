@@ -301,9 +301,11 @@ class RuntimeController extends EventEmitter {
         }, [RuntimeState.STARTING]);
     }
 
-    stopTimeout(error) {
+    stopTimeout(error, options = {}) {
         return this._commit("stop_timeout", {
-            desiredState: DesiredState.STOPPED,
+            desiredState: options.preserveDesired === true
+                ? this._desiredState
+                : DesiredState.STOPPED,
             actualState: RuntimeState.ERROR,
             lastError: normalizeError(error, "STOP_TIMEOUT", "Runtime stop timed out"),
         }, [RuntimeState.STOPPING, RuntimeState.STOPPED]);

@@ -88,7 +88,7 @@ class OutputWriter:
     def _run(self) -> None:
         """Main loop: dequeue events and write to stdout."""
         import time
-        while self._running:
+        while self._running or self._queue.depth > 0:
             event = self._queue.get(timeout=0.5)
             if event is None:
                 continue
@@ -164,6 +164,8 @@ class AibanRunner:
 
         self._runner_version = "1.0.0"
         self._shutdown_event = threading.Event()
+        self._lifecycle_lock = threading.RLock()
+        self._shutdown_reason = "unknown"
 
         # Stats tracking per source for watermark-based pause/resume
         self._source_frame_counts: Dict[str, int] = {}
@@ -273,14 +275,7 @@ class AibanRunner:
         """Called when stdin is closed (Node-RED process exited)."""
         logger = logging.getLogger(__name__)
         logger.info("stdin closed, initiating graceful shutdown")
-        # Trigger the same shutdown sequence as a stop command
-        if self._lifecycle.state == LifecycleState.READY:
-            self._lifecycle.transition_to(LifecycleState.STOPPING)
-            try:
-                self._sdk_adapter.stop_pipeline()
-            except Exception:
-                pass
-        self._shutdown_event.set()
+        self._request_runner_shutdown("stdin_eof")
 
     # ------------------------------------------------------------------
     # Watermark management
@@ -364,6 +359,64 @@ class AibanRunner:
     # Command handlers
     # ------------------------------------------------------------------
 
+    def _stop_pipeline(self, reason: str, force: bool = False) -> Dict[str, Any]:
+        """Stop the SDK pipeline without terminating the Runner process."""
+        logger = logging.getLogger(__name__)
+        with self._lifecycle_lock:
+            if self._lifecycle.state == LifecycleState.STOPPED:
+                return {
+                    "message": "Pipeline already stopped",
+                    "reason": reason,
+                    "already_stopped": True,
+                }
+
+            frames_emitted = self._lifecycle.frames_emitted
+            self._lifecycle.transition_to(LifecycleState.STOPPING)
+            self._output_queue.put(make_envelope(
+                event_type="runtime_stopping",
+                session_id=self._lifecycle.session_id,
+                event_seq=self._lifecycle.next_seq(),
+                payload={
+                    "reason": reason,
+                    "frames_emitted": frames_emitted,
+                },
+            ))
+
+            try:
+                # The adapter maps this to the AiBan SDK's stopPipline().
+                self._sdk_adapter.stop_pipeline()
+            except Exception as exc:
+                self._lifecycle.transition_to(LifecycleState.ERROR)
+                if not force:
+                    raise
+                logger.exception(
+                    "Pipeline stop failed during forced cleanup: reason=%s",
+                    reason,
+                )
+                logger.warning("Continuing forced Runner shutdown after: %s", exc)
+
+            self._lifecycle.transition_to(LifecycleState.STOPPED)
+            self._output_queue.put(make_envelope(
+                event_type="runtime_stopped",
+                session_id=self._lifecycle.session_id,
+                event_seq=self._lifecycle.next_seq(),
+                payload={
+                    "exit_code": 0,
+                    "reason": reason,
+                    "frames_emitted": self._lifecycle.frames_emitted,
+                },
+            ))
+            return {
+                "message": "Pipeline stopped",
+                "reason": reason,
+                "already_stopped": False,
+            }
+
+    def _request_runner_shutdown(self, reason: str) -> None:
+        """Request final Runner termination after graceful pipeline cleanup."""
+        self._shutdown_reason = reason
+        self._shutdown_event.set()
+
     def _cmd_start(self, command: str, request_id: str, params: dict) -> dict:
         """Handle 'start' command — initialize SDK and build pipeline."""
         if self._lifecycle.state == LifecycleState.READY:
@@ -419,62 +472,40 @@ class AibanRunner:
         return {"message": "Pipeline started"}
 
     def _cmd_stop(self, command: str, request_id: str, params: dict) -> dict:
-        """Handle 'stop' command — gracefully stop pipeline."""
-        force = params.get("force", False)
-
-        self._lifecycle.transition_to(LifecycleState.STOPPING)
-
-        # Emit runtime_stopping
-        event = make_envelope(
-            event_type="runtime_stopping",
-            session_id=self._lifecycle.session_id,
-            event_seq=self._lifecycle.next_seq(),
-            payload={
-                "reason": "command",
-                "frames_emitted": self._lifecycle.frames_emitted,
-            },
+        """Handle 'stop': stop the pipeline, then terminate the Runner."""
+        result = self._stop_pipeline(
+            reason="command",
+            force=bool(params.get("force", False)),
         )
-        self._output_queue.put(event)
-
-        # Stop SDK pipeline
-        try:
-            self._sdk_adapter.stop_pipeline()
-        except Exception:
-            if not force:
-                raise
-
-        self._lifecycle.transition_to(LifecycleState.STOPPED)
-        self._shutdown_event.set()
-
-        # Emit runtime_stopped
-        event = make_envelope(
-            event_type="runtime_stopped",
-            session_id=self._lifecycle.session_id,
-            event_seq=self._lifecycle.next_seq(),
-            payload={
-                "exit_code": 0,
-                "reason": "normal",
-                "frames_emitted": self._lifecycle.frames_emitted,
-            },
-        )
-        # Put directly — queue may have been drained
-        try:
-            self._output_queue.put(event)
-        except Exception:
-            pass
-
-        return {"message": "Pipeline stopped"}
+        self._request_runner_shutdown("command")
+        return {
+            **result,
+            "runner_shutdown_requested": True,
+        }
 
     def _cmd_restart(self, command: str, request_id: str, params: dict) -> dict:
-        """Handle 'restart' command."""
-        self._cmd_stop("stop", request_id + "-stop", {})
-        # Wait a moment for cleanup
-        import time
-        time.sleep(0.5)
-        self._lifecycle._event_seq = 0  # Reset sequence
-        self._lifecycle._state = LifecycleState.CREATED
-        self._lifecycle._frames_emitted = 0
-        return self._cmd_start("start", request_id + "-start", {})
+        """Restart the pipeline in-process while keeping the Runner alive."""
+        if self._shutdown_event.is_set():
+            raise RuntimeError("Runner shutdown is already in progress")
+
+        with self._lifecycle_lock:
+            previous_session_id = self._lifecycle.session_id
+            self._stop_pipeline(
+                reason="restart",
+                force=bool(params.get("force", False)),
+            )
+            session_id = self._lifecycle.reset_for_restart(reuse_session=False)
+            self._command_loop.set_session_id(session_id)
+            self._source_frame_counts.clear()
+            start_result = self._cmd_start("start", request_id + "-start", {})
+
+        return {
+            **start_result,
+            "message": "Pipeline restarted",
+            "previous_session_id": previous_session_id,
+            "session_id": session_id,
+            "runner_shutdown_requested": False,
+        }
 
     def _cmd_health(self, command: str, request_id: str, params: dict) -> dict:
         """Handle 'health' command."""
@@ -577,15 +608,21 @@ class AibanRunner:
         """Wait for shutdown signal and return exit code."""
         self._shutdown_event.wait()
 
-        # Drain remaining events
         logger = logging.getLogger(__name__)
-        logger.info("Shutting down...")
-        self._command_loop.stop()
-        self._writer.stop()
+        logger.info("Shutting down: reason=%s", self._shutdown_reason)
 
-        # Wait for threads
+        # Every final Runner exit path must first stop the SDK pipeline.
+        try:
+            self._stop_pipeline(reason=self._shutdown_reason, force=True)
+        except Exception:
+            logger.exception("Unexpected failure during final pipeline cleanup")
+
+        # Let an in-flight command enqueue its command_result before stopping
+        # the writer, then drain every remaining protocol event.
+        self._command_loop.stop()
+        self._command_loop.join(timeout=0.5)
+        self._writer.stop()
         self._writer.join(timeout=5.0)
-        self._command_loop.join(timeout=5.0)
         self._lifecycle.shutdown()
 
         logger.info("Runner exited")
@@ -593,7 +630,7 @@ class AibanRunner:
 
     def stop(self) -> None:
         """Signal the runner to stop."""
-        self._shutdown_event.set()
+        self._request_runner_shutdown("signal")
 
 
 # ---------------------------------------------------------------------------

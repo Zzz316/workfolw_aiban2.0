@@ -140,6 +140,24 @@ describe("RuntimeController", () => {
         assert.equal(controller.lastError.code, "STOP_TIMEOUT");
     });
 
+    test("restart intent survives a stop timeout until the old process exits", () => {
+        const controller = createController();
+        startAndSpawn(controller);
+        controller.runtimeReady({ sessionId: "old-session" });
+        controller.requestStop({ action: "restart" });
+        controller.requestStart({ action: "restart" });
+        controller.stopTimeout(undefined, { preserveDesired: true });
+
+        assert.equal(controller.actualState, RuntimeState.ERROR);
+        assert.equal(controller.desiredState, DesiredState.READY);
+        assert.equal(controller.lastError.code, "STOP_TIMEOUT");
+
+        controller.processExited({ code: -1, signal: "SIGKILL", expected: true });
+        assert.equal(controller.actualState, RuntimeState.STOPPED);
+        assert.equal(controller.desiredState, DesiredState.READY);
+        assert.equal(controller.pid, null);
+    });
+
     test("runtime_stopped keeps PID until the child process actually exits", () => {
         const controller = createController();
         startAndSpawn(controller, 6789);

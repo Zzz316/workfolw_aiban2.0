@@ -308,7 +308,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
         let decision;
         if (action === "start") {
-            if (this._process && !this._process.killed
+            if (this._process
                 && this._runtimeController.actualState === RuntimeState.ERROR) {
                 this._stopProcess(false, metadata);
                 decision = this._startProcess(true, metadata);
@@ -318,7 +318,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         } else if (action === "stop") {
             decision = this._stopProcess(false, metadata);
         } else if (action === "restart") {
-            if (!this._process || this._process.killed) {
+            if (!this._process) {
                 decision = this._startProcess(true, metadata);
             } else if (this._runtimeController.actualState === RuntimeState.STOPPING) {
                 decision = this._startProcess(true, metadata);
@@ -610,6 +610,21 @@ module.exports = function registerAibanRuntimeNode(RED) {
     // Process management
     // ==================================================================
 
+    AibanRuntimeNode.prototype._forceKillProcess = function (child, options = {}) {
+        if (!child || (child.killed && options.allowRepeat !== true)) {
+            return false;
+        }
+        const operationId = options.operationId || `forced-${Date.now()}`;
+        const reason = options.reason || "unspecified";
+        const signal = options.signal || "SIGKILL";
+        const message = `Force killing Python process: operation_id=${operationId}`
+            + ` pid=${child.pid || "unknown"} reason=${reason} signal=${signal}`;
+        this.warn(message);
+        this._writeLegacyVideoLog("runtime:force-kill", message);
+        child.kill(signal);
+        return true;
+    };
+
     AibanRuntimeNode.prototype._startProcess = function (forceAutoStart, metadata = {}) {
         const transitionMetadata = {
             ...metadata,
@@ -617,7 +632,9 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 || (forceAutoStart === true ? "manual" : "runtime"),
         };
         const startDecision = this._transitionRuntime("requestStart", transitionMetadata);
-        if (this._process && !this._process.killed) {
+        // A successful kill() only means a signal was sent.  The child remains
+        // owned by this node until its exit event clears _process.
+        if (this._process) {
             if (startDecision && startDecision.queued) {
                 this.warn("Process is stopping; start request queued");
             } else {
@@ -666,6 +683,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
             return this._transitionRuntime("spawnFailed", err);
         }
         const child = this._process;
+        const startOperationId = metadata.operationId || `auto-start-${Date.now()}`;
         this._transitionRuntime("processSpawned", { pid: child.pid });
 
         // --- Setup stdout reader (JSON Lines events) ---
@@ -706,11 +724,19 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 `Python process exited: code=${code} signal=${signal}`
             );
             const stateBeforeExit = this._runtimeController.getStatus();
-            const restartAfterStop = stateBeforeExit.actualState === RuntimeState.STOPPING
-                && stateBeforeExit.desiredState === DesiredState.READY
-                && !this._shutdownInitiated;
+            const restartAfterStop = stateBeforeExit.desiredState === DesiredState.READY
+                && !this._shutdownInitiated
+                && (
+                    [RuntimeState.STOPPING, RuntimeState.STOPPED]
+                        .includes(stateBeforeExit.actualState)
+                    || (
+                        stateBeforeExit.actualState === RuntimeState.ERROR
+                        && stateBeforeExit.lastEvent === "stop_timeout"
+                    )
+                );
             const expectedStop = this._shutdownInitiated
                 || stateBeforeExit.desiredState === DesiredState.STOPPED
+                || restartAfterStop
                 || (stateBeforeExit.actualState === RuntimeState.STOPPING && !restartAfterStop);
             if (this._process === child) {
                 this._process = null;
@@ -767,7 +793,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 this._sendCommand({
                     schema_version: SCHEMA_VERSION,
                     command: "start",
-                    request_id: metadata.operationId || `auto-start-${Date.now()}`,
+                    request_id: startOperationId,
                     params: {},
                 }).catch((err) => {
                     this.warn(`Auto-start failed: ${err.message}`);
@@ -809,7 +835,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
                         message: `runtime_ready not received within ${this.startupTimeoutMs}ms`,
                     });
                     if (this._process === child && !child.killed) {
-                        child.kill("SIGKILL");
+                        this._forceKillProcess(child, {
+                            operationId: startOperationId,
+                            reason: "startup_timeout",
+                        });
                     }
                 }
             }, this.startupTimeoutMs);
@@ -818,10 +847,13 @@ module.exports = function registerAibanRuntimeNode(RED) {
     };
 
     AibanRuntimeNode.prototype._stopProcess = function (force, metadata = {}) {
-        const stopDecision = this._transitionRuntime("requestStop", {
+        const operationId = metadata.operationId || `stop-${Date.now()}`;
+        const stopMetadata = {
             ...metadata,
+            operationId,
             source: metadata.source || (force ? "forced" : "runtime"),
-        });
+        };
+        const stopDecision = this._transitionRuntime("requestStop", stopMetadata);
         if (!this._process || this._process.killed) {
             return stopDecision;
         }
@@ -829,8 +861,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
         const child = this._process;
 
         if (force) {
-            this.log("Force killing Python process");
-            child.kill("SIGKILL");
+            this._forceKillProcess(child, {
+                operationId,
+                reason: metadata.reason || "forced_stop",
+            });
             return stopDecision;
         }
 
@@ -838,25 +872,35 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._sendCommand({
             schema_version: SCHEMA_VERSION,
             command: "stop",
-            request_id: metadata.operationId || `stop-${Date.now()}`,
+            request_id: operationId,
             params: { force: false },
-        }).catch(() => {
+        }).catch((err) => {
             // If command fails, force kill
-            this.warn("Stop command failed, force killing");
             if (this._process === child && !child.killed) {
-                child.kill("SIGKILL");
+                this._forceKillProcess(child, {
+                    operationId,
+                    reason: `stop_command_failed:${err.message}`,
+                });
             }
         });
 
         // Set a hard timeout for graceful shutdown
         setTimeout(() => {
             if (this._process === child && !child.killed) {
-                this.warn("Shutdown timeout, force killing");
+                const preserveDesired = this._runtimeController.desiredState
+                    === DesiredState.READY;
                 this._transitionRuntime("stopTimeout", {
                     code: "STOP_TIMEOUT",
                     message: `process did not exit within ${this.shutdownTimeoutMs}ms`,
+                }, {
+                    preserveDesired,
                 });
-                child.kill("SIGKILL");
+                this._forceKillProcess(child, {
+                    operationId,
+                    reason: metadata.action
+                        ? `shutdown_timeout:${metadata.action}`
+                        : "shutdown_timeout",
+                });
             }
         }, this.shutdownTimeoutMs);
         return stopDecision;
@@ -1218,7 +1262,10 @@ module.exports = function registerAibanRuntimeNode(RED) {
                     message: `no heartbeat received within ${this.heartbeatTimeoutMs}ms`,
                 });
                 if (this._process && !this._process.killed) {
-                    this._process.kill("SIGKILL");
+                    this._forceKillProcess(this._process, {
+                        operationId: `heartbeat-${Date.now()}`,
+                        reason: "heartbeat_timeout",
+                    });
                 }
                 // Unexpected exit is handled by the restart policy.
             }
@@ -1231,7 +1278,11 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
     AibanRuntimeNode.prototype._onClose = function (removed, done) {
         this._shutdownInitiated = true;
-        this._transitionRuntime("requestStop", { source: "node_close" });
+        const closeOperationId = `close-${Date.now()}`;
+        this._transitionRuntime("requestStop", {
+            operationId: closeOperationId,
+            source: "node_close",
+        });
         this._clearTimers();
         const closeAuditLogs = () => {
             if (this._auditText) {
@@ -1248,28 +1299,35 @@ module.exports = function registerAibanRuntimeNode(RED) {
             }
         };
 
-        if (this._process && !this._process.killed) {
-            // Send stop and wait briefly
-            try {
-                const line = JSON.stringify({
-                    schema_version: SCHEMA_VERSION,
-                    command: "stop",
-                    request_id: `close-${Date.now()}`,
-                    params: { force: true },
-                }) + "\n";
-                this._process.stdin.write(line);
-            } catch (_) {
-                // stdin may be closed
+        if (this._process) {
+            const closingChild = this._process;
+            if (!closingChild.killed) {
+                // Send stop and wait briefly.
+                try {
+                    const line = JSON.stringify({
+                        schema_version: SCHEMA_VERSION,
+                        command: "stop",
+                        request_id: closeOperationId,
+                        params: { force: true },
+                    }) + "\n";
+                    closingChild.stdin.write(line);
+                } catch (_) {
+                    // stdin may be closed
+                }
             }
 
             // Force kill after shutdown timeout
             const killTimer = setTimeout(() => {
-                if (this._process && !this._process.killed) {
-                    this._process.kill("SIGKILL");
+                if (this._process === closingChild) {
+                    this._forceKillProcess(closingChild, {
+                        operationId: closeOperationId,
+                        reason: removed ? "node_deleted_timeout" : "node_close_timeout",
+                        allowRepeat: true,
+                    });
                 }
             }, this.shutdownTimeoutMs);
 
-            this._process.on("exit", () => {
+            closingChild.on("exit", () => {
                 clearTimeout(killTimer);
                 closeAuditLogs();
                 done();

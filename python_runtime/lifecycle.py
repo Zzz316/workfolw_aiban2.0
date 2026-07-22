@@ -229,6 +229,39 @@ class LifecycleManager:
         if new_state == LifecycleState.READY:
             self._started_at = time.monotonic()
             self._start_heartbeat()
+        elif new_state in (
+            LifecycleState.STOPPING,
+            LifecycleState.STOPPED,
+            LifecycleState.ERROR,
+        ):
+            self.stop_heartbeat()
+
+    def reset_for_restart(self, reuse_session: bool = False) -> str:
+        """Reset pipeline lifecycle state without terminating the Runner.
+
+        A same-process compatibility restart creates a new session by default,
+        so event sequence numbers may safely restart at zero. Production
+        restarts replace the whole process and therefore get a new session
+        naturally.
+        """
+        if self._state != LifecycleState.STOPPED:
+            raise RuntimeError(
+                f"Lifecycle must be stopped before restart reset, got {self._state}"
+            )
+        self.stop_heartbeat()
+        if not reuse_session:
+            self._session_id = str(uuid.uuid4())
+        self._event_seq = 0
+        self._state = LifecycleState.CREATED
+        self._started_at = None
+        self._frames_emitted = 0
+        self._paused_sources = []
+        logger.info(
+            "Lifecycle reset for restart: session=%s reused=%s",
+            self._session_id,
+            reuse_session,
+        )
+        return self._session_id
 
     def is_ready(self) -> bool:
         return self._state == LifecycleState.READY
