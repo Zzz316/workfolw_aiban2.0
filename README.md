@@ -1,242 +1,189 @@
 # AiBan Workflow 2.0
 
-> AiBan 智能视频分析平台 —— 工作流引擎 2.0（架构重启版）
-> 将业务编排从 Python 引擎迁移到 Node-RED，Node-RED 直接管理 Python/AiBan 子进程。
-> 当前阶段：**Phase 2（A-B-C 组件拓扑最小闭环）**
+> AiBan 智能视频分析平台工作流引擎 2.0。<br>
+> Node-RED 是运行入口和业务编排引擎，Python Runner 只负责 AiBan SDK 与进程协议适配。<br>
+> 当前阶段：完成单 Runtime + 单线性顺序闭环基线，正在执行 M0/M1（基线校正与 Runtime 生命周期稳定化）。
 
----
+## 当前状态
 
-## ⚠️ 架构变更通知（2026-07-02）
+截至 2026-07-22：
 
-本项目的核心架构已发生重大变更：
+- Node-RED 可以直接启动 Python Runner 和 AiBan Pipeline。
+- stdin/stdout JSON Lines 帧通道、心跳、错误、截图和 source 控制已实现。
+- `aiban-label → aiban-result → aiban-result-db` 线性顺序闭环已实现。
+- 全量自动化测试 `91/91` 通过；Phase 2 专项测试 `30/30` 通过。
+- 2026-07-22 本地日志记录了真实 `group-1/source-1` 模型帧进入 Node-RED。
+- 真实 SDK 端到端 OK/NG、真实 MySQL 成功写入、24 小时稳定性仍需按正式测试矩阵验收。
+- Scene Manager 当前是 localStorage Demo，正式 Registry API 和 scene router 尚未实现。
 
-**旧架构（已冻结）：**
-```text
-Python 常驻进程 → AiBan SDK 回调 → SQLite Outbox → ZeroMQ → Node-RED frame-input → SQLite Inbox → 下游
-```
+项目整体工程成熟度估算约为 36%（±5%）。这里的完成度同时考虑代码、自动化、真实环境、文档和验收，不是代码行比例。
 
-**新架构（v2.0-runtime-restart）：**
+详细进度见：
+
+- [开发计划](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md)
+- [开发任务说明书](WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md)
+- [开发文档变更记录](docs/DEVELOPMENT_CHANGELOG.md)
+- [2026-07-22 基线记录](docs/BASELINE_2026-07-22.md)
+
+## 当前架构
+
 ```text
 Node-RED aiban-runtime
-  → child_process.spawn(Python)
-  → Python 初始化 AiBan SDK 并执行推理
-  → 本机 stdin/stdout JSON Lines 通信
-  → aiban-runtime 将结果转为 Node-RED msg
-  → 直接发送给下游业务组件
+  → child_process.spawn(Python Runner)
+  → Python 加载 AiBan SDK、校验配置并启动 Pipeline
+  → SDK 回调内复制 metadata
+  → stdout JSON Lines frame/status/error
+  → aiban-runtime 输出标准 Node-RED msg
+  → aiban-label
+  → 简单顺序逻辑 / 后续通用逻辑节点
+  → aiban-result
+  → result-db / alarm / socket / api-output
 ```
 
-Node-RED 成为系统的启动入口、运行主控和业务工作流引擎。Python 不再主动通过 ZeroMQ 向 Node-RED 发送数据。
+旧的 `main.py → SQLite Outbox → ZeroMQ → frame-input → SQLite Inbox` 链路已经冻结，不再是 2.0 主链路。旧代码仅用于迁移对照和必要回退。
 
-详见 [`WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md`](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md)（v2.0 架构重启版）。
+## 架构边界
 
----
+### Python Runner
 
-## 新架构概览
+- 加载 AiBan Python SDK。
+- 注册帧和 SDK 事件回调。
+- 执行 `checkAllConfig()`、`buildPipline()`、`stopPipline()`。
+- 在 metadata 有效期内复制模型、检测框和时间字段。
+- 管理有界输出队列、高低水位和 source pause/resume。
+- 通过 stdin 接收控制命令，通过 stdout 输出结构化事件。
+- 不执行顺序、计时、报警、写业务库等通用业务逻辑。
+
+### Node-RED
+
+- 管理 Python/AiBan 进程生命周期。
+- 把 frame/status/error 转为标准消息。
+- 执行标签、顺序、计时、状态和结果逻辑。
+- 后续按 `group_id + scene_id` 路由到独立场景子流程。
+- 管理结果、审计、截图和外部副作用。
+
+## 三类启停
+
+| 控制 | 范围 | 说明 |
+|---|---|---|
+| Runtime start/stop/restart | 整个 Python/AiBan Pipeline | 运维控制 |
+| Source pause/resume | 单 group/source | `sourceControl()`，用于过载和运维 |
+| Scene enable/disable/select | 单业务场景 | 只控制业务路由，不停止 SDK |
+
+当前 Runtime 按钮已经能够调用启停接口，但按钮显示状态、统一控制入口和 restart 持续存活仍在 T01～T04 中完善。
+
+## 目录概览
 
 ```text
-Node-RED
-└── aiban-runtime（配置节点/输入节点）
-    ├── 校验配置
-    ├── child_process.spawn(Python)
-    ├── 写入控制命令（stdin，JSON Lines）
-    ├── 读取推理事件（stdout，JSON Lines）
-    ├── 读取运行日志（stderr）
-    ├── 管理启动、停止、重启和健康状态
-    └── node.send(msg)
-          ↓
-      aiban-label（标签匹配）
-          ↓
-      counter / timer / state / sequence / monitor（业务节点）
-          ↓
-      alarm / result-db / speaker / api-output（副作用节点）
-```
-
-### Python Runner 职责
-
-- 加载 AiBan Python SDK
-- 按正确顺序注册回调、校验配置并启动 Pipeline
-- 在 SDK 回调有效期内复制 metadata，转换为纯 Python 数据
-- 输出标准推理事件、SDK 状态事件和截图结果（stdout，JSON Lines）
-- 接收启动、停止、健康检查、截图、暂停和恢复等控制命令（stdin，JSON Lines）
-- 不执行标签判断、顺序判断、报警、写业务库等通用业务逻辑
-
----
-
-## 目录结构
-
-```
 workfolw_aiban_2.0/
 ├── README.md
-├── WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md  # 开发总纲（架构重启版）
-├── WORKFLOW_DOC.md                     # 1.0 引擎功能文档（参考）
-│
-├── python_runtime/                     # Python AiBan Runner（阶段一已验收）
-│   ├── aiban_runner.py                 #   Runner 主入口
-│   ├── sdk_adapter.py                  #   AiBan SDK 适配器
-│   ├── protocol.py                     #   JSON Lines 协议编解码
-│   ├── command_loop.py                 #   stdin 控制命令循环
-│   └── lifecycle.py                    #   启动/停止/健康检查
-│
-├── core/                               # 核心引擎
-│   ├── frame_bridge/                   # [LEGACY] ZMQ 帧桥接（已冻结）
-│   ├── workflow_engine.py              # 1.0 工作流引擎（保留回退）
-│   ├── video_logic.py                  # 视频推理逻辑
-│   ├── video_process.py                # 子进程入口
-│   ├── alarm_db.py                     # 报警数据库操作
-│   └── infra.py                        # 基础设施
-│
+├── WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md
+├── WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md
+├── WORKFLOW_DOC.md                     # 1.0 参考文档
+├── python_runtime/                     # 新 Python Runner
 ├── node-red-contrib-aiban-workflow/    # Node-RED 自定义节点包
-│   ├── aiban-runtime.js/.html          # Runtime 管理节点（阶段一已验收）
-│   ├── aiban-label.js/.html            # 标签匹配节点
-│   ├── aiban-result.js/.html           # 结果聚合节点
-│   ├── aiban-result-db.js/.html        # 结果入库节点
-│   ├── sequence-node.js/.html          # 顺序检测节点
-│   ├── timer-node.js/.html             # 计时器节点
-│   ├── state-node.js/.html             # 状态机节点
-│   ├── monitor-node.js/.html           # 安环监控节点
-│   ├── api-trigger-node.js/.html       # API 触发节点
-│   ├── api-output-node.js/.html        # API 输出节点
-│   ├── socket-client-node.js/.html     # Socket 客户端节点
-│   ├── exporter-node.js/.html          # 工作流导出节点
-│   ├── frame-input-node.js/.html       # [LEGACY] ZMQ 帧输入节点
-│   ├── lib/                            # 共享库
-│   ├── test/                           # Node.js 测试
-│   └── examples/                       # 示例流程
-│
-├── node-red/                           # Node-RED 运行时
-├── docs/                               # 文档
-│   ├── LEGACY_ZMQ_MIGRATION.md         #   旧架构代码处置清单
-│   ├── WORKFLOW_1_0_PARITY_MATRIX.md   #   1.0 功能对等矩阵
-│   ├── ENVIRONMENT.md                  #   现场环境记录
-│   ├── FRAME_PROTOCOL.md               #   旧帧协议（归档）
-│   ├── PHASE1_STATUS.md                #   旧阶段一状态（归档）
-│   ├── TEST_REPORT_PHASE_1.md          #   旧阶段一测试报告（归档）
-│   ├── PHASE2_MESSAGE_CONTRACT.md      #   旧阶段二消息契约（归档）
-│   └── TEST_REPORT_PHASE_2.md          #   旧阶段二测试报告（归档）
-│
-├── config/
-├── tests/                              # Python 测试（旧架构，已冻结）
-├── icameraapi/                         # Flask Web API + AiBan SDK 绑定
-├── tools/                              # 工具脚本
-├── workflows/                          # 工作流 JSON 定义
-└── data/                               # 运行时数据
+│   ├── aiban-runtime.js/.html
+│   ├── aiban-label.js/.html
+│   ├── aiban-result.js/.html
+│   ├── aiban-result-db.js/.html
+│   ├── lib/
+│   ├── test/
+│   └── examples/
+├── node-red/                           # Node-RED userDir、flows 和 settings
+├── frontend-demo/scene-manager/        # 场景管理原型
+├── docs/
+├── core/                               # 1.0/旧架构兼容代码
+├── workflows/                          # 1.0 JSON 工作流参考
+└── tools/
 ```
 
----
+## 环境
 
-## 开发阶段（架构重启版）
+当前基线环境：
 
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| **阶段 0** | **冻结旧架构并重置基线** | ✅ **已完成** |
-| **阶段 1** | **Node-RED 直接启动 Python/AiBan** | ✅ **已完成** |
-| **阶段 2** | **A-B-C 组件拓扑最小闭环** | 🔧 **进行中** |
-| 阶段 3 | 迁移全部业务逻辑组件 | 📋 |
-| 阶段 4 | 迁移副作用组件 | 📋 |
-| 阶段 5 | 运行管理 | 📋 |
-| 阶段 6 | 切换与发布 v2.0.0 | 📋 |
+| 组件 | 版本/路径 |
+|---|---|
+| Windows | Windows 11 x64 |
+| Node.js | v24.13.0 |
+| npm | 11.6.2 |
+| Python | 3.9.13 |
+| Node-RED | 4.1.3 |
+| AiBan SDK | `D:/product/AiBanWorkSpace`，Python 3.9 绑定 |
+| Pipeline YAML | `D:/product/AiBanWorkSpace/abvideo/main-flow.yaml` |
 
-旧阶段一（ZMQ 帧通道 ✅）和旧阶段二（A-B-C ZMQ 闭环 ✅）已完成但不再作为新架构基线。
-旧代码已标记为 `legacy-zmq-baseline` 标签，处置方案见 [`docs/LEGACY_ZMQ_MIGRATION.md`](docs/LEGACY_ZMQ_MIGRATION.md)。
+详细环境见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
 
----
-
-## 快速开始
-
-### 环境要求
-
-| 组件 | 版本 | 说明 |
-|------|------|------|
-| Windows | 11 Pro 10.0.26200 | x64 |
-| Python | 3.9.13 | AiBan SDK 绑定 |
-| Node.js | v24.13.0 | Node-RED 运行时 |
-| Node-RED | v4.1.3 | 业务工作流引擎 |
-| AiBan SDK | libAiBanVideoPy3_9 | 默认路径 `D:/product/AiBanWorkSpace/` |
-
-详见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)。
-
-### 安装依赖
+## 安装
 
 ```powershell
-# Node-RED 自定义节点
 cd node-red-contrib-aiban-workflow
-npm install
+npm.cmd install
 
-# Node-RED 运行时
-cd ../node-red
-npm install
+cd ..\node-red
+npm.cmd install
 ```
 
-### 启动（新架构）
+## 启动
 
-新架构阶段一已完成，当前以 Node-RED 作为启动入口：
+2.0 主链路只需要启动 Node-RED：
 
 ```powershell
-# 仅需启动 Node-RED（aiban-runtime 节点会自动管理 Python 子进程）
 cd node-red
-npx node-red --settings settings.js
+npx.cmd node-red --settings settings.js
 ```
 
-开发测试时可在 aiban-runtime 节点配置中启用 `useMock` 开关，无需真实 AiBan 硬件。
+`aiban-runtime` 节点负责 Python Runner。开发环境可以在节点中启用 `useMock`；真实现场必须关闭 `useMock` 并配置 Python、SDK 和 Pipeline YAML。
 
-旧架构启动方式（已冻结，仅用于回退）：
+真实 SDK 操作步骤见 [docs/REAL_SDK_TEST.md](docs/REAL_SDK_TEST.md)。
 
-```powershell
-# 终端 1：Node-RED
-cd node-red && npx node-red --settings settings.js
-
-# 终端 2：Python
-python main.py
-```
-
----
-
-## 测试
+## 自动化测试
 
 ```powershell
-# 新架构阶段一测试（Python Runner 集成测试）
 cd node-red-contrib-aiban-workflow
-npm run test:phase1       # Python 子进程集成测试（需要 Python 环境）
 
-# 新架构阶段一测试（Node-RED 节点组件测试）
-node --test test/aiban-runtime-node.test.js   # aiban-runtime.js 节点测试（无 Python 依赖）
+# 全量：2026-07-22 基线为 91/91
+npm.cmd test
 
-# 全量测试
-npm test                  # 包含所有阶段一和阶段二测试
+# Python Runner 生命周期专项
+npm.cmd run test:phase1
 
-# 旧架构测试（保留，用于回退验证）
-python -m unittest tests.test_frame_bridge -v
+# 线性顺序状态机专项：2026-07-22 基线为 30/30
+npm.cmd run test:phase2
 
-# Windows 孤儿进程检查
+cd ..
 powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 ```
 
----
+Mock 测试不能代替真实 SDK、真实 MySQL 和现场稳定性验证。
 
-## 关键设计决策（架构重启版）
+## 开发里程碑
 
-1. **Node-RED 是系统启动入口和业务工作流执行引擎**
-2. **Node-RED 组件直接启动并管理 Python/AiBan 子进程**（`child_process.spawn`）
-3. **Python 与 Node-RED 阶段一使用本机 stdin/stdout JSON Lines 通信**
-4. **推理事件由 `aiban-runtime` 直接 `node.send()` 给下游组件**
-5. **ZMQ、Outbox、Inbox 和 ACK 不再属于新主链路**（标记为 `legacy-zmq-baseline`）
-6. **Python 只负责 SDK 和协议适配，不执行通用业务工作流**
-7. **SDK metadata 必须在回调有效期内转换为普通数据**
-8. **回调线程不得直接执行阻塞管道写入或业务动作**
-9. **过载时优先暂停视频源，不允许静默丢帧**
-10. **Deploy、停止和异常退出必须正确回收 Python/AiBan 进程**
-11. **1.0 全部现用功能完成对等迁移和现场验证后，才允许发布 2.0**
-12. **阶段二验收前，保留旧架构回退能力；旧 ZMQ 主链路不再新增功能**
+| 里程碑 | 内容 | 当前状态 |
+|---|---|---|
+| M0 | 基线冻结与文档校正 | 进行中 |
+| M1 | Runtime 生命周期稳定化 | 待开发，已有约 70% 可复用基础 |
+| M2 | outcome/result 协议与组件分层 | 待开发，已有线性结果基础 |
+| M3 | 真实 group 元数据与 Scene Registry | 待开发，已有前端 Demo |
+| M4 | Scene Router 与首场景子流程 | 待开发 |
+| M5 | 真实 SDK/MySQL 生产闭环 | 部分链路有运行证据，未正式验收 |
+| M6 | Sequence/Monitor/Timer/Custom Flow 迁移 | 待逐项迁移 |
+| M7 | 运维、双跑、回退和发布 | 待开发 |
 
----
+任务 ID、日期、剩余人日、依赖和验收标准见 [开发任务说明书](WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md)。
 
-## 相关文档
+## 关键文档
 
-| 文档 | 说明 |
-|------|------|
-| [`WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md`](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md) | 开发总纲（架构重启版） |
-| [`WORKFLOW_DOC.md`](WORKFLOW_DOC.md) | 1.0 引擎功能文档 |
-| [`docs/LEGACY_ZMQ_MIGRATION.md`](docs/LEGACY_ZMQ_MIGRATION.md) | 旧架构代码处置清单 |
-| [`docs/WORKFLOW_1_0_PARITY_MATRIX.md`](docs/WORKFLOW_1_0_PARITY_MATRIX.md) | 1.0 功能对等矩阵 |
-| [`docs/PHASE2_MESSAGE_CONTRACT.md`](docs/PHASE2_MESSAGE_CONTRACT.md) | 新阶段二消息契约 |
-| [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md) | 现场环境记录 |
+| 文档 | 用途 |
+|---|---|
+| [WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md) | 当前架构和 M0～M7 计划 |
+| [WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md](WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md) | T00～T22 任务、排期和进度 |
+| [docs/AIBAN_RUNTIME_PROTOCOL.md](docs/AIBAN_RUNTIME_PROTOCOL.md) | Runner 控制和事件协议 |
+| [docs/PHASE2_MESSAGE_CONTRACT.md](docs/PHASE2_MESSAGE_CONTRACT.md) | frame、workflow 和 result 契约 |
+| [docs/WORKFLOW_1_0_PARITY_MATRIX.md](docs/WORKFLOW_1_0_PARITY_MATRIX.md) | 1.0 功能迁移事实矩阵 |
+| [docs/REAL_SDK_TEST.md](docs/REAL_SDK_TEST.md) | 真实 SDK 测试步骤 |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | 运维和故障恢复 |
+| [docs/LEGACY_ZMQ_MIGRATION.md](docs/LEGACY_ZMQ_MIGRATION.md) | 旧 ZMQ 代码处置策略 |
+
+## 发布限制
+
+当前不得创建正式 `workflow-v2.0.0` 标签。只有 M7 完成、现用 1.0 能力有明确迁移结论、真实环境和回退演练通过后，才允许发布 2.0.0。
