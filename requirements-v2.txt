@@ -1,5 +1,6 @@
 # Workflow 2.0 frame bridge
 pyzmq==26.4.0
+PyYAML==6.0.3
 
 # Business MySQL used by save-db, alarm and cycle-record nodes/services
 PyMySQL==1.1.2

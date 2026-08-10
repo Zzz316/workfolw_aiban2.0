@@ -1,8 +1,8 @@
-# AiBan Runtime Protocol v1.2
+# AiBan Runtime Protocol v1.4
 
-> 文档版本：v1.2<br>
+> 文档版本：v1.4<br>
 > 编制日期：2026-07-02<br>
-> 更新日期：2026-07-22<br>
+> 更新日期：2026-07-24<br>
 > 协议版本：`schema_version: 1`
 
 ---
@@ -88,6 +88,8 @@ JSONL 事件协议和 Node-RED 控制面状态是两个层次。`aiban-runtime` 
   "restart_count": 0,
   "last_error": null,
   "state_changed_at": "2026-07-22T10:00:00.000Z",
+  "ready_metadata": null,
+  "ready_metadata_summary": null,
   "message": "Start request accepted; wait for runtime_ready before treating it as READY"
 }
 ```
@@ -100,6 +102,46 @@ JSONL 事件协议和 Node-RED 控制面状态是两个层次。`aiban-runtime` 
 - `STARTING/STOPPING/RECOVERING` 时编辑器禁用重复操作；其他入口的重复请求返回幂等或排队结果。
 - 外部 `restart` 由 Node-RED 停止旧进程并在退出后重新 spawn；不得把 Python 进程内 `restart` 作为生产控制路径。
 - `health`、`pause_source`、`resume_source` 和 `screenshot` 仍是发送给当前 Python Runner 的进程内命令。
+- 收到 `runtime_ready` 后，Node-RED 状态接口会缓存当前 session 的 `ready_metadata`；下一次启动请求会清空旧 metadata，直到新 session 再次 READY。
+
+`ready_metadata` 是最近一次 `runtime_ready.payload` 的受控拷贝，并补充事件定位字段：
+
+```json
+{
+  "session_id": "uuid",
+  "event_id": "uuid",
+  "event_seq": 1,
+  "emitted_at": "2026-07-24T10:00:00.000+08:00",
+  "received_at": "2026-07-24T10:00:00.030+08:00",
+  "groups": [/* normalized groups */],
+  "sources_per_group": {"1": [101]},
+  "models_loaded": ["1"],
+  "models": [/* normalized models */],
+  "pipeline_config": {
+    "schema_version": "pipeline-config/v1",
+    "config_path": "D:/product/AiBanWorkSpace/abvideo/main-flow.yaml",
+    "config_path_normalized": "D:\\product\\AiBanWorkSpace\\abvideo\\main-flow.yaml",
+    "disabled_groups": []
+  }
+}
+```
+
+`ready_metadata_summary` 是给编辑器、轮询和 heartbeat 使用的轻量摘要：
+
+```json
+{
+  "schema_version": "pipeline-config/v1",
+  "session_id": "uuid",
+  "event_seq": 1,
+  "group_count": 2,
+  "enabled_group_count": 1,
+  "disabled_group_count": 1,
+  "disabled_groups": [2],
+  "source_count": 3,
+  "model_count": 2,
+  "models_loaded": ["1", "12"]
+}
+```
 
 ---
 
@@ -238,19 +280,69 @@ Runner 进程已启动，正在初始化 SDK。
 #### `runtime_ready`
 
 SDK 配置校验成功、Pipeline 已启动，可以接收推理帧。
-**此事件只能在 `checkAllConfig()` 通过且 `buildPipline()` 成功后发送。**
+真实 SDK 模式下，Runner 必须先从 `pipeline_config` 解析 group/source/model metadata，再执行 `checkAllConfig()` 与 `buildPipline()`。
+**此事件只能在 Pipeline metadata 解析成功、`checkAllConfig()` 通过且 `buildPipline()` 成功后发送。**
 
 ```json
 {
   "schema_version": 1, "type": "runtime_ready",
   "session_id": "...", "event_id": "...", "event_seq": 1, "emitted_at": "...",
   "payload": {
-    "groups": [1, 2],
-    "sources_per_group": {"1": [1, 2, 3], "2": [1]},
-    "models_loaded": ["1", "12"]
+    "groups": [
+      {
+        "group_id": 1,
+        "group_id_str": "1",
+        "name": "entrance",
+        "enabled": true,
+        "sources": [
+          {
+            "source_id": 101,
+            "source_id_str": "101",
+            "name": "Entrance A",
+            "enabled": true,
+            "config_path": "camera-101.yaml",
+            "config_path_normalized": "D:\\AiBan\\abvideo\\camera-101.yaml"
+          }
+        ],
+        "infers": [{"model_id": 1, "model_id_str": "1", "enabled": true}],
+        "model_ids": [1],
+        "model_id_strs": ["1"]
+      }
+    ],
+    "sources_per_group": {"1": [101]},
+    "models_loaded": ["1"],
+    "models": [
+      {
+        "model_id": 1,
+        "model_id_str": "1",
+        "name": "",
+        "enabled": true,
+        "model_path": "models\\ppe.onnx",
+        "model_path_normalized": "D:\\AiBan\\abvideo\\models\\ppe.onnx"
+      }
+    ],
+    "pipeline_config": {
+      "schema_version": "pipeline-config/v1",
+      "config_path": "D:/product/AiBanWorkSpace/abvideo/main-flow.yaml",
+      "config_path_normalized": "D:\\product\\AiBanWorkSpace\\abvideo\\main-flow.yaml",
+      "disabled_groups": [2]
+    }
   }
 }
 ```
+
+| payload 字段 | 类型 | 说明 |
+|---|---|---|
+| `groups` | array | 规范化 group 列表；不再使用临时 `groups: [1]` |
+| `groups[].group_id` / `source_id` / `model_id` | int | Runner 已规范化后的数字 ID |
+| `groups[].*_id_str` | string | 为 JSON/UI/日志保留的字符串 ID |
+| `groups[].enabled` | bool | `groupenable` / 等价字段的解析结果；禁用 group 仍会出现在 metadata 中 |
+| `sources_per_group` | object | 由解析结果派生，key 为 `group_id_str`，value 为 source ID 数组 |
+| `models_loaded` | array | 由 `ModelArrary.Models` 派生的 model ID 字符串数组 |
+| `models` | array | 规范化 model metadata，路径同时保留原值和规范化值 |
+| `pipeline_config` | object | 解析器摘要、规范化主配置路径和 `disabled_groups` |
+
+如果真实模式下配置解析失败，Runner 不得发送 `runtime_ready`；对应 `start` 命令返回 `command_result.ok=false`，`error` 以 `PIPELINE_CONFIG_*` 错误码开头，例如 `PIPELINE_CONFIG_NOT_FOUND`、`PIPELINE_CONFIG_MISSING_SOURCE_CONFIG` 或 `PIPELINE_CONFIG_UNKNOWN_MODEL_REF`。Mock 模式使用同一字段结构生成 mock metadata。
 
 #### `heartbeat`
 
@@ -520,6 +612,8 @@ msg = {
   }
 }
 ```
+
+heartbeat 状态消息可以在 `msg.aiban.ready_metadata_summary` 中携带轻量 group/source/model 摘要；不得在每次 heartbeat 中重复完整 `ready_metadata.groups` 静态配置。
 
 ### 5.3 输出端口 3：错误/诊断
 

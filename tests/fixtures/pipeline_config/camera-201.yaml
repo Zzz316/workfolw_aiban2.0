@@ -1,0 +1,8 @@
+id: 201
+name: "Disabled Yard"
+url: "rtsp://example.invalid/sanitized/yard"
+fps: 10
+decodecache: 1
+enablestream: true
+inferenable: true
+temprun: true

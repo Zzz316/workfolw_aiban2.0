@@ -80,10 +80,7 @@
 
 | 项目 | 值 |
 |------|-----|
-| Flask API 端口 | 9090（旧） |
 | Node-RED 端口 | 1880 |
-| API Server 端口 | 18080（旧） |
-| Socket Server 端口 | 10000（旧） |
 
 ---
 
@@ -92,5 +89,4 @@
 | 项目 | 值 |
 |------|-----|
 | 当前分支 | `v2.0-runtime-restart` |
-| 旧基线标签 | `legacy-zmq-baseline` |
-| 旧架构分支 | `v2.0-node-red-runtime` |
+| 当前发布门禁 | T16～T18 和现场签字未完成前不得创建正式 `workflow-v2.0.0` 标签 |

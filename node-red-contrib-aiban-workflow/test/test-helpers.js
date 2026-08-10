@@ -110,7 +110,7 @@ function createMockRED(options = {}) {
     const nodeRegistry = new Map();
 
     // Ensure logs directory exists for audit log writes
-    const logsDir = path.resolve(userDir, "..", "logs", "frame_bridge");
+    const logsDir = path.resolve(userDir, "..", "logs", "runtime");
     fs.mkdirSync(logsDir, { recursive: true });
 
     const RED = {
@@ -205,6 +205,16 @@ function createMockRED(options = {}) {
 
             post(path, ...handlers) {
                 RED.httpAdmin._routes.push({ method: "POST", path, handlers });
+                return handlers[handlers.length - 1]; // return last handler
+            },
+
+            put(path, ...handlers) {
+                RED.httpAdmin._routes.push({ method: "PUT", path, handlers });
+                return handlers[handlers.length - 1]; // return last handler
+            },
+
+            delete(path, ...handlers) {
+                RED.httpAdmin._routes.push({ method: "DELETE", path, handlers });
                 return handlers[handlers.length - 1]; // return last handler
             },
         },

@@ -1,0 +1,38 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-sequence-logic", {
+        category: "艾班工作流",
+        color: "#B6D7F2",
+        defaults: {
+            name: { value: "Sequence 2.0" },
+            workflowId: { value: "group/1/scene/sequence", required: true },
+            sceneId: { value: "sequence", required: true },
+            cycleTimeoutMs: { value: 30000, validate: RED.validators.number() },
+            completionEvent: { value: "complete" },
+            stepsJson: { value: "[]", required: true },
+            loopModeJson: { value: "{}" },
+            presenceJson: { value: "null" },
+            alarmEachMissing: { value: true },
+            saveDbEachMissing: { value: true }
+        },
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ["标准 outcome", "transition/effect"],
+        icon: "font-awesome/fa-list-ol",
+        label: function () { return this.name || "Sequence 2.0"; }
+    });
+</script>
+<script type="text/html" data-template-name="aiban-sequence-logic">
+    <div class="form-row"><label>名称</label><input type="text" id="node-input-name"></div>
+    <div class="form-row"><label>Workflow ID</label><input type="text" id="node-input-workflowId"></div>
+    <div class="form-row"><label>Scene ID</label><input type="text" id="node-input-sceneId"></div>
+    <div class="form-row"><label>周期超时(ms)</label><input type="number" id="node-input-cycleTimeoutMs"></div>
+    <div class="form-row"><label>完成事件</label><input type="text" id="node-input-completionEvent"></div>
+    <div class="form-row"><label>步骤 JSON</label><textarea id="node-input-stepsJson" rows="10" style="width:70%"></textarea></div>
+    <div class="form-row"><label>Loop JSON</label><textarea id="node-input-loopModeJson" rows="5" style="width:70%"></textarea></div>
+    <div class="form-row"><label>Presence JSON</label><textarea id="node-input-presenceJson" rows="4" style="width:70%"></textarea></div>
+    <div class="form-row"><label>逐项报警</label><input type="checkbox" id="node-input-alarmEachMissing"></div>
+    <div class="form-row"><label>逐项写库</label><input type="checkbox" id="node-input-saveDbEachMissing"></div>
+</script>
+<script type="text/html" data-help-name="aiban-sequence-logic">
+    <p>接在 aiban-scene-entry 后；规则层输出标准 outcome，不在 aiban-result 内实现业务规则。</p>
+</script>

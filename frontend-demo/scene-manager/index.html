@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AiBan 场景定义中心</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --surface-2: #f9fafb;
+      --line: #d9dee7;
+      --text: #182230;
+      --muted: #667085;
+      --blue: #1f6feb;
+      --blue-weak: #e7f0ff;
+      --green: #1f7a45;
+      --green-weak: #dff7e8;
+      --amber: #9a5b00;
+      --amber-weak: #fff0cc;
+      --red: #b42318;
+      --red-weak: #ffe4e0;
+      --shadow: 0 10px 26px rgba(16, 24, 40, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 260px minmax(640px, 1fr);
+    }
+
+    .side {
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      padding: 18px 16px;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      min-height: 68px;
+      padding: 14px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: rgba(255, 255, 255, 0.9);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+    }
+
+    .content {
+      padding: 20px 22px 28px;
+      display: grid;
+      gap: 18px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+
+    h3 {
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .panel,
+    .card,
+    .group {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .panel {
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .group {
+      padding: 12px;
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+
+    .group.active {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.12);
+    }
+
+    .group-title,
+    .card-title,
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      color: var(--green);
+      background: var(--green-weak);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .badge.blue {
+      color: #174ea6;
+      background: var(--blue-weak);
+    }
+
+    .badge.amber {
+      color: var(--amber);
+      background: var(--amber-weak);
+    }
+
+    .badge.red {
+      color: var(--red);
+      background: var(--red-weak);
+    }
+
+    .btn {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      color: var(--text);
+      background: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      color: #fff;
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+
+    .btn.danger {
+      color: var(--red);
+      border-color: #f3b1aa;
+      background: #fffafa;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .scene-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .card.active {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.12);
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .kv {
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface-2);
+      min-width: 0;
+    }
+
+    .kv .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .kv .value {
+      margin-top: 3px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 7px 9px;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 118px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.12);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .diagram {
+      min-height: 270px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(#edf1f6 1px, transparent 1px),
+        linear-gradient(90deg, #edf1f6 1px, transparent 1px),
+        #fbfcfe;
+      background-size: 22px 22px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .node {
+      position: absolute;
+      width: 150px;
+      min-height: 54px;
+      border: 1px solid #98a2b3;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 6px 16px rgba(20, 32, 48, 0.12);
+      display: grid;
+      grid-template-columns: 12px 1fr;
+      overflow: hidden;
+    }
+
+    .stripe {
+      background: #7ec8e3;
+    }
+
+    .node.router .stripe {
+      background: #a7d8a5;
+    }
+
+    .node.scene .stripe {
+      background: #f1c36d;
+    }
+
+    .node.result .stripe {
+      background: #b7a7e8;
+    }
+
+    .node-body {
+      padding: 8px 10px;
+      min-width: 0;
+    }
+
+    .node-name {
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .node-info {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    path {
+      fill: none;
+      stroke: #8994a5;
+      stroke-width: 2;
+    }
+
+    path.active {
+      stroke: var(--blue);
+      stroke-width: 3;
+    }
+
+    pre {
+      margin: 0;
+      padding: 11px;
+      max-height: 260px;
+      overflow: auto;
+      border-radius: 7px;
+      color: #d6e7ff;
+      background: #111827;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.48;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      width: min(360px, calc(100vw - 36px));
+      padding: 12px 14px;
+      border-radius: 8px;
+      color: #fff;
+      background: #17202a;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity 160ms ease, transform 160ms ease;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .mode-banner {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+      color: #155724;
+      background: #dff7e7;
+      font-weight: 700;
+    }
+
+    .mode-banner.demo {
+      color: #7a4b00;
+      background: #fff1c2;
+      border-bottom-color: #edc55a;
+    }
+
+    .mode-banner.error {
+      color: #842029;
+      background: #f8d7da;
+      border-bottom-color: #f1aeb5;
+    }
+
+    @media (max-width: 1080px) {
+      .app {
+        display: block;
+      }
+
+      .side {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .content {
+        padding: 14px;
+      }
+
+      .split,
+      .meta {
+        grid-template-columns: 1fr;
+      }
+
+      .diagram {
+        min-width: 680px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="side">
+      <h2>物理分组</h2>
+      <p class="muted" style="margin-bottom:14px;">默认从 Runtime / Scene Registry API 读取；仅显式 ?demo=1 使用本地示例数据。</p>
+      <div id="groupList"></div>
+    </aside>
+
+    <section class="main">
+      <div class="mode-banner" id="modeBanner">正在连接 Scene Registry…</div>
+      <header class="topbar">
+        <div>
+          <h1>AiBan 场景定义中心</h1>
+          <p class="muted" id="summary"></p>
+        </div>
+        <div class="toolbar">
+          <button class="btn" id="copyRegistryBtn" type="button">复制场景注册表</button>
+          <button class="btn primary" id="openNodeRedBtn" type="button">进入 Node-RED 子流程</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="grid">
+          <div class="panel">
+            <div class="row" style="margin-bottom:12px;">
+              <div>
+                <h2>场景定义</h2>
+                <p class="muted">在外部业务系统中创建场景，然后进入 Node-RED 维护对应子流程。</p>
+              </div>
+              <span class="badge blue" id="groupBadge"></span>
+            </div>
+
+            <form id="sceneForm">
+              <div class="split">
+                <div class="field">
+                  <label for="sceneName">场景名称</label>
+                  <input id="sceneName" required placeholder="例如：插接顺序检测">
+                </div>
+                <div class="field">
+                  <label for="sceneId">scene_id</label>
+                  <input id="sceneId" required placeholder="plug-sequence">
+                </div>
+              </div>
+              <div class="split">
+                <div class="field">
+                  <label for="sceneMode">运行模式</label>
+                  <select id="sceneMode">
+                    <option value="exclusive">exclusive - 同组单场景</option>
+                    <option value="parallel">parallel - 后台并行</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="nodeRedTabId">Node-RED 子流程 Tab ID</label>
+                  <input id="nodeRedTabId" placeholder="可先留空，保存后由 Node-RED 回填">
+                </div>
+              </div>
+              <div class="field">
+                <label for="sceneDesc">业务说明</label>
+                <textarea id="sceneDesc" placeholder="这个场景要在 Node-RED 中编排的逻辑"></textarea>
+              </div>
+              <div class="toolbar">
+                <button class="btn primary" type="submit">保存场景</button>
+                <button class="btn" id="resetFormBtn" type="button">清空</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="panel">
+            <h2>进入编排</h2>
+            <div class="diagram" aria-label="场景进入 Node-RED 子流程示意图">
+              <svg viewBox="0 0 640 270" preserveAspectRatio="none">
+                <path class="active" d="M 130 78 C 180 78, 190 78, 240 78"></path>
+                <path class="active" d="M 390 78 C 435 78, 440 174, 485 174"></path>
+                <path d="M 560 174 C 590 174, 594 174, 624 174"></path>
+              </svg>
+              <div class="node" style="left:28px;top:50px;">
+                <div class="stripe"></div>
+                <div class="node-body">
+                  <div class="node-name">外部前端</div>
+                  <div class="node-info">场景定义</div>
+                </div>
+              </div>
+              <div class="node router" style="left:242px;top:50px;">
+                <div class="stripe"></div>
+                <div class="node-body">
+                  <div class="node-name">scene registry</div>
+                  <div class="node-info">group + scene</div>
+                </div>
+              </div>
+              <div class="node scene" style="left:488px;top:146px;">
+                <div class="stripe"></div>
+                <div class="node-body">
+                  <div class="node-name" id="diagramScene">group1/plug-sequence</div>
+                  <div class="node-info">Node-RED tab</div>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top:12px;">
+              <h3>当前跳转目标</h3>
+              <pre id="jumpTarget"></pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="row" style="margin-bottom:12px;">
+            <div>
+              <h2>已定义场景</h2>
+              <p class="muted">点击“进入编排”会打开 Node-RED，对应到该场景的子流程 tab。</p>
+            </div>
+            <span class="badge" id="sceneCount"></span>
+          </div>
+          <div class="scene-list" id="sceneList"></div>
+        </section>
+
+        <section class="grid">
+          <div class="panel">
+            <h2>场景注册表 JSON</h2>
+            <pre id="registryJson"></pre>
+          </div>
+          <div class="panel">
+            <h2>发送给 Node-RED 的场景选择消息</h2>
+            <pre id="selectMsg"></pre>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script type="text/plain" id="legacy-scene-manager-demo">
+    const nodeRedBaseUrl = "http://127.0.0.1:1880";
+    const storageKey = "aiban.external.scene.manager.v1";
+
+    const defaults = {
+      activeGroupId: 1,
+      activeSceneKey: "1:plug-sequence",
+      groups: [
+        {
+          group_id: 1,
+          group_name: "group1",
+          enabled: true,
+          sources: [{source_index: 1, config: "D:/product/AiBanWorkSpace/abvideo/1.yaml"}],
+          models: [{model_id: "0", model_name: "huayang-2"}]
+        },
+        {
+          group_id: 2,
+          group_name: "group2",
+          enabled: false,
+          sources: [],
+          models: []
+        }
+      ],
+      scenes: [
+        {
+          group_id: 1,
+          scene_id: "plug-sequence",
+          name: "插接顺序检测",
+          mode: "exclusive",
+          node_red_tab_id: "tab-group1-plug-sequence",
+          description: "阶段二 A-B-C 拓扑闭环迁移后的第一个场景子流程。"
+        },
+        {
+          group_id: 1,
+          scene_id: "safety-monitor",
+          name: "安环持续监控",
+          mode: "parallel",
+          node_red_tab_id: "tab-group1-safety-monitor",
+          description: "后台长期运行的监控类子流程。"
+        }
+      ]
+    };
+
+    const state = load();
+
+    const groupList = document.getElementById("groupList");
+    const sceneList = document.getElementById("sceneList");
+    const summary = document.getElementById("summary");
+    const groupBadge = document.getElementById("groupBadge");
+    const sceneCount = document.getElementById("sceneCount");
+    const registryJson = document.getElementById("registryJson");
+    const selectMsg = document.getElementById("selectMsg");
+    const jumpTarget = document.getElementById("jumpTarget");
+    const diagramScene = document.getElementById("diagramScene");
+    const toast = document.getElementById("toast");
+    const form = document.getElementById("sceneForm");
+    const sceneName = document.getElementById("sceneName");
+    const sceneId = document.getElementById("sceneId");
+    const sceneMode = document.getElementById("sceneMode");
+    const nodeRedTabId = document.getElementById("nodeRedTabId");
+    const sceneDesc = document.getElementById("sceneDesc");
+
+    document.getElementById("openNodeRedBtn").addEventListener("click", () => openNodeRed(activeScene()));
+    document.getElementById("copyRegistryBtn").addEventListener("click", copyRegistry);
+    document.getElementById("resetFormBtn").addEventListener("click", resetForm);
+    sceneName.addEventListener("input", fillSceneId);
+    sceneId.addEventListener("input", () => sceneId.dataset.manual = "1");
+    form.addEventListener("submit", saveScene);
+
+    render();
+
+    function load() {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return JSON.parse(JSON.stringify(defaults));
+        const parsed = JSON.parse(raw);
+        return {
+          ...JSON.parse(JSON.stringify(defaults)),
+          ...parsed,
+          groups: parsed.groups || defaults.groups,
+          scenes: parsed.scenes || defaults.scenes
+        };
+      } catch (_) {
+        return JSON.parse(JSON.stringify(defaults));
+      }
+    }
+
+    function persist() {
+      localStorage.setItem(storageKey, JSON.stringify(state));
+    }
+
+    function render() {
+      renderGroups();
+      renderScenes();
+      renderDetails();
+      persist();
+    }
+
+    function renderGroups() {
+      groupList.innerHTML = "";
+      state.groups.forEach(group => {
+        const item = document.createElement("div");
+        item.className = "group" + (group.group_id === state.activeGroupId ? " active" : "");
+        item.innerHTML = `
+          <div class="group-title">
+            <strong>${html(group.group_name)}</strong>
+            <span class="badge ${group.enabled ? "" : "amber"}">${group.enabled ? "启用" : "停用"}</span>
+          </div>
+          <p class="muted" style="margin-top:7px;">group_id=${group.group_id} · source=${group.sources.length} · model=${group.models.length}</p>
+        `;
+        item.addEventListener("click", () => {
+          state.activeGroupId = group.group_id;
+          const first = scenesForGroup(group.group_id)[0];
+          if (first) state.activeSceneKey = sceneKey(first);
+          render();
+        });
+        groupList.appendChild(item);
+      });
+    }
+
+    function renderScenes() {
+      const scenes = scenesForGroup(state.activeGroupId);
+      sceneCount.textContent = `${scenes.length} 个场景`;
+      sceneList.innerHTML = "";
+
+      if (!scenes.length) {
+        sceneList.innerHTML = `<p class="muted">当前 group 尚未定义场景。</p>`;
+        return;
+      }
+
+      scenes.forEach(scene => {
+        const card = document.createElement("article");
+        card.className = "card" + (sceneKey(scene) === state.activeSceneKey ? " active" : "");
+        card.innerHTML = `
+          <div class="card-title">
+            <strong>${html(scene.name)}</strong>
+            <span class="badge ${scene.mode === "parallel" ? "blue" : ""}">${scene.mode}</span>
+          </div>
+          <p class="muted">${html(workflowId(scene))}</p>
+          <p class="muted">${html(scene.description || "未填写业务说明")}</p>
+          <div class="meta">
+            <div class="kv">
+              <div class="label">scene_id</div>
+              <div class="value">${html(scene.scene_id)}</div>
+            </div>
+            <div class="kv">
+              <div class="label">Node-RED Tab</div>
+              <div class="value">${html(scene.node_red_tab_id || "未绑定")}</div>
+            </div>
+          </div>
+          <div class="toolbar">
+            <button class="btn primary" data-action="open" type="button">进入编排</button>
+            <button class="btn" data-action="edit" type="button">编辑</button>
+            <button class="btn" data-action="copy" type="button">复制消息</button>
+            <button class="btn danger" data-action="delete" type="button">删除</button>
+          </div>
+        `;
+        card.querySelector('[data-action="open"]').addEventListener("click", () => openNodeRed(scene));
+        card.querySelector('[data-action="edit"]').addEventListener("click", () => editScene(scene));
+        card.querySelector('[data-action="copy"]').addEventListener("click", () => copyText(JSON.stringify(selectMessage(scene), null, 2), "场景选择消息已复制"));
+        card.querySelector('[data-action="delete"]').addEventListener("click", () => deleteScene(scene));
+        sceneList.appendChild(card);
+      });
+    }
+
+    function renderDetails() {
+      const group = activeGroup();
+      const scene = activeScene();
+      groupBadge.textContent = `${group.group_name} / group_id=${group.group_id}`;
+      summary.textContent = scene
+        ? `当前场景：${scene.name}，进入 Node-RED 后维护 ${workflowId(scene)} 子流程`
+        : `当前 group：${group.group_name}，尚未选择场景`;
+      diagramScene.textContent = scene ? workflowId(scene) : `${group.group_name}/未选择`;
+      registryJson.textContent = JSON.stringify(sceneRegistry(), null, 2);
+      selectMsg.textContent = JSON.stringify(selectMessage(scene), null, 2);
+      jumpTarget.textContent = JSON.stringify(jumpInfo(scene), null, 2);
+    }
+
+    function saveScene(event) {
+      event.preventDefault();
+      const scene = {
+        group_id: state.activeGroupId,
+        scene_id: slug(sceneId.value),
+        name: sceneName.value.trim(),
+        mode: sceneMode.value,
+        node_red_tab_id: nodeRedTabId.value.trim(),
+        description: sceneDesc.value.trim()
+      };
+
+      if (!scene.scene_id || !scene.name) {
+        notify("场景名称和 scene_id 不能为空");
+        return;
+      }
+
+      const key = sceneKey(scene);
+      const index = state.scenes.findIndex(item => sceneKey(item) === key);
+      if (index >= 0) {
+        state.scenes[index] = scene;
+        notify("场景已更新");
+      } else {
+        state.scenes.push(scene);
+        notify("场景已创建");
+      }
+      state.activeSceneKey = key;
+      resetForm();
+      render();
+    }
+
+    function editScene(scene) {
+      state.activeSceneKey = sceneKey(scene);
+      sceneName.value = scene.name;
+      sceneId.value = scene.scene_id;
+      sceneId.dataset.manual = "1";
+      sceneMode.value = scene.mode;
+      nodeRedTabId.value = scene.node_red_tab_id || "";
+      sceneDesc.value = scene.description || "";
+      render();
+    }
+
+    function deleteScene(scene) {
+      state.scenes = state.scenes.filter(item => sceneKey(item) !== sceneKey(scene));
+      const next = scenesForGroup(state.activeGroupId)[0];
+      state.activeSceneKey = next ? sceneKey(next) : "";
+      render();
+      notify("场景已删除");
+    }
+
+    function resetForm() {
+      form.reset();
+      sceneId.dataset.manual = "0";
+    }
+
+    function fillSceneId() {
+      if (sceneId.dataset.manual === "1") return;
+      sceneId.value = slug(sceneName.value);
+    }
+
+    function openNodeRed(scene) {
+      if (!scene) {
+        notify("请先选择或创建场景");
+        return;
+      }
+      state.activeSceneKey = sceneKey(scene);
+      render();
+      window.open(nodeRedUrl(scene), "_blank", "noopener,noreferrer");
+    }
+
+    function nodeRedUrl(scene) {
+      if (!scene) return nodeRedBaseUrl;
+      if (scene.node_red_tab_id) {
+        return `${nodeRedBaseUrl}/#flow/${encodeURIComponent(scene.node_red_tab_id)}`;
+      }
+      return `${nodeRedBaseUrl}/#flow/${encodeURIComponent(workflowId(scene))}`;
+    }
+
+    function jumpInfo(scene) {
+      if (!scene) return {url: nodeRedBaseUrl, warning: "未选择场景"};
+      return {
+        url: nodeRedUrl(scene),
+        node_red_tab_id: scene.node_red_tab_id || "",
+        workflow_id: workflowId(scene),
+        note: "真实接入时由后端保存 scene registry，并把 node_red_tab_id 与 Node-RED tab 绑定。"
+      };
+    }
+
+    function selectMessage(scene) {
+      const group = activeGroup();
+      return {
+        topic: "aiban/scene/select",
+        payload: {
+          group_id: group.group_id,
+          group_name: group.group_name,
+          scene_id: scene ? scene.scene_id : "",
+          mode: scene ? scene.mode : "exclusive",
+          workflow_id: scene ? workflowId(scene) : "",
+          node_red_tab_id: scene ? scene.node_red_tab_id || "" : "",
+          operator: "external-frontend-demo"
+        }
+      };
+    }
+
+    function sceneRegistry() {
+      return {
+        version: 1,
+        node_red_base_url: nodeRedBaseUrl,
+        groups: state.groups,
+        scenes: state.scenes.map(scene => ({
+          ...scene,
+          workflow_id: workflowId(scene),
+          node_red_url: nodeRedUrl(scene)
+        }))
+      };
+    }
+
+    function copyRegistry() {
+      copyText(JSON.stringify(sceneRegistry(), null, 2), "场景注册表已复制");
+    }
+
+    async function copyText(text, message) {
+      try {
+        await navigator.clipboard.writeText(text);
+        notify(message);
+      } catch (_) {
+        notify("浏览器未允许复制，请手动复制代码框内容");
+      }
+    }
+
+    function activeGroup() {
+      return state.groups.find(group => group.group_id === state.activeGroupId) || state.groups[0];
+    }
+
+    function activeScene() {
+      return state.scenes.find(scene => sceneKey(scene) === state.activeSceneKey)
+        || scenesForGroup(state.activeGroupId)[0]
+        || null;
+    }
+
+    function scenesForGroup(groupId) {
+      return state.scenes.filter(scene => scene.group_id === groupId);
+    }
+
+    function sceneKey(scene) {
+      return `${scene.group_id}:${scene.scene_id}`;
+    }
+
+    function workflowId(scene) {
+      const group = state.groups.find(item => item.group_id === scene.group_id);
+      const groupName = group ? group.group_name : `group${scene.group_id}`;
+      return `${groupName}/${scene.scene_id}`;
+    }
+
+    function slug(value) {
+      return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_]+/g, "-")
+        .replace(/[^a-z0-9-]/g, "")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "");
+    }
+
+    function html(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function notify(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(notify.timer);
+      notify.timer = setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+  </script>
+  <script src="./app.js"></script>
+</body>
+</html>

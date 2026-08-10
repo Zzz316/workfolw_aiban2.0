@@ -4,7 +4,9 @@
         color: "#FFA07A",
         defaults: {
             name: { value: "结果判定" },
+            mode: { value: "simple-sequence" },
             workflow_id: { value: "abc-sequence-demo" },
+            scene_id: { value: "default" },
             cycle_timeout_ms: { value: 30000 },
             allow_same_frame_restart: { value: false },
             stateDbPath: { value: "data/workflow/flow-state.db" },
@@ -26,9 +28,22 @@
         <input type="text" id="node-input-name" placeholder="结果判定">
     </div>
     <div class="form-row">
+        <label for="node-input-mode"><i class="fa fa-random"></i> 模式</label>
+        <select id="node-input-mode">
+            <option value="simple-sequence">simple-sequence</option>
+            <option value="outcome">outcome</option>
+        </select>
+        <span class="form-tip">simple-sequence 自动解析上游标签链；outcome 直接接收 msg.workflow.outcome。</span>
+    </div>
+    <div class="form-row">
         <label for="node-input-workflow_id"><i class="fa fa-sitemap"></i> Workflow ID</label>
         <input type="text" id="node-input-workflow_id" placeholder="abc-sequence-demo">
         <span class="form-tip">流程标识符，用于状态隔离和审计日志。</span>
+    </div>
+    <div class="form-row">
+        <label for="node-input-scene_id"><i class="fa fa-object-group"></i> Scene ID</label>
+        <input type="text" id="node-input-scene_id" placeholder="default">
+        <span class="form-tip">场景标识符，当前简单顺序链默认使用 default。</span>
     </div>
     <div class="form-row">
         <label for="node-input-cycle_timeout_ms"><i class="fa fa-clock-o"></i> 周期超时 (ms)</label>
@@ -75,13 +90,18 @@
     <p>状态按 (workflow_id + session_id + group_id + source_id) 隔离。</p>
 
     <h4>输出</h4>
-    <p>仅输出 <b>终端事件</b> (OK/NG/TIMEOUT/INTERRUPTED)，
-    包含 <code>msg.abc_result</code> 完整字段。
+    <p><b>simple-sequence</b> 模式仅输出终端事件 (OK/NG/TIMEOUT/INTERRUPTED)，
+    包含兼容字段 <code>msg.abc_result</code>，并在 <code>msg.workflow.outcome</code>
+    与 <code>msg.workflow.result</code> 中携带标准结果契约。
     过渡事件通过 WorkflowAuditLogger 异步记录到审计日志。</p>
+    <p><b>outcome</b> 模式直接接收上游 <code>msg.workflow.outcome</code>，不反向解析拓扑，
+    只负责校验、生成 <code>result_event_id</code>、终态去重、按需截图和统一输出。</p>
 
     <h4>配置</h4>
     <ul>
+        <li><b>模式</b>: simple-sequence 保持旧低配置用法；outcome 用于复杂逻辑节点直接提交终态。</li>
         <li><b>Workflow ID</b>: 流程标识符，用于状态隔离。</li>
+        <li><b>Scene ID</b>: 场景标识符，后续接入 Scene Registry 时由场景配置提供。</li>
         <li><b>周期超时</b>: 从匹配第一个标签开始的超时时间 (毫秒)。</li>
         <li><b>同帧重启</b>: 是否允许完成周期后立即使用同帧数据启动新周期。</li>
         <li><b>状态数据库路径</b>: SQLite 数据库路径 (相对于 userDir)。</li>

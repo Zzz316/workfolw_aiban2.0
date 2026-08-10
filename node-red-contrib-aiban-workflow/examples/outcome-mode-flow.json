@@ -1,0 +1,135 @@
+[
+    {
+        "id": "phase2-outcome-tab",
+        "type": "tab",
+        "label": "Phase 2: outcome 模式结果出口",
+        "disabled": false,
+        "info": "复杂逻辑示例: inject/function 构造 msg.workflow.outcome → aiban-result(mode=outcome) → aiban-result-db\n\n验证要点:\n- 上游 function/timer/switch 节点拥有业务状态机\n- aiban-result 不反向解析拓扑，只校验 outcome、生成 result_event_id、去重、截图和统一输出\n- result-db 可消费 workflow.outcome/result，并继续兼容 abc_result"
+    },
+    {
+        "id": "inject-outcome-ok",
+        "type": "inject",
+        "z": "phase2-outcome-tab",
+        "name": "构造 OK outcome",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"status\":\"OK\",\"cycle_id\":\"demo-cycle-ok\",\"actual_steps\":[\"A\",\"B\",\"C\"]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "demo/outcome",
+        "x": 150,
+        "y": 120,
+        "wires": [["function-build-outcome"]]
+    },
+    {
+        "id": "inject-outcome-ng",
+        "type": "inject",
+        "z": "phase2-outcome-tab",
+        "name": "构造 NG outcome",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"status\":\"NG\",\"cycle_id\":\"demo-cycle-ng\",\"reason\":\"switch branch saw C before B\",\"expected_step\":\"B\",\"actual_steps\":[\"A\",\"C\"]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "demo/outcome",
+        "x": 150,
+        "y": 180,
+        "wires": [["function-build-outcome"]]
+    },
+    {
+        "id": "inject-outcome-timeout",
+        "type": "inject",
+        "z": "phase2-outcome-tab",
+        "name": "构造 TIMEOUT outcome",
+        "props": [
+            {
+                "p": "payload",
+                "v": "{\"status\":\"TIMEOUT\",\"cycle_id\":\"demo-cycle-timeout\",\"reason\":\"timer expired waiting for C\",\"expected_step\":\"C\",\"actual_steps\":[\"A\",\"B\"]}",
+                "vt": "json"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "demo/outcome",
+        "x": 170,
+        "y": 240,
+        "wires": [["function-build-outcome"]]
+    },
+    {
+        "id": "function-build-outcome",
+        "type": "function",
+        "z": "phase2-outcome-tab",
+        "name": "复杂逻辑提交 outcome",
+        "func": "const p = msg.payload || {};\nconst status = String(p.status || 'OK').toUpperCase();\nconst now = new Date().toISOString();\nmsg.workflow = {\n    outcome: {\n        schema_version: 'workflow-outcome/v1',\n        workflow_id: 'complex-demo',\n        scene_id: 'complex-scene',\n        cycle_id: p.cycle_id,\n        status,\n        started_at: p.started_at || now,\n        finished_at: now,\n        duration_ms: Number(p.duration_ms || 0),\n        code: status === 'OK' ? null : status,\n        reason: p.reason || null,\n        expected_step: p.expected_step || null,\n        actual_steps: Array.isArray(p.actual_steps) ? p.actual_steps : [],\n        runtime: {\n            session_id: 'demo-session',\n            stream_id: 'group-1/source-1',\n            group_id: 1,\n            source_id: 1,\n            start_event_seq: 1,\n            end_event_seq: 1\n        },\n        evidence: {\n            image_path: '',\n            screenshot_error: null\n        },\n        compatibility: {\n            abc_result_event_id: null\n        }\n    }\n};\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 410,
+        "y": 180,
+        "wires": [["result-outcome"]]
+    },
+    {
+        "id": "result-outcome",
+        "type": "aiban-result",
+        "z": "phase2-outcome-tab",
+        "name": "结果出口 (outcome)",
+        "mode": "outcome",
+        "workflow_id": "complex-demo",
+        "scene_id": "complex-scene",
+        "cycle_timeout_ms": "30000",
+        "allow_same_frame_restart": false,
+        "stateDbPath": "data/workflow/flow-state.db",
+        "auditDir": "logs/workflow",
+        "x": 650,
+        "y": 180,
+        "wires": [["result-db-outcome"]]
+    },
+    {
+        "id": "result-db-outcome",
+        "type": "aiban-result-db",
+        "z": "phase2-outcome-tab",
+        "name": "结果入库 (兼容)",
+        "tableName": "icamera_data.workflow_result_event",
+        "regionName": "",
+        "okAlarmContent": "流程OK",
+        "maxRetries": "3",
+        "retryDelayMs": "500",
+        "queueSize": "1000",
+        "x": 870,
+        "y": 180,
+        "wires": [["debug-outcome-result"]]
+    },
+    {
+        "id": "debug-outcome-result",
+        "type": "debug",
+        "z": "phase2-outcome-tab",
+        "name": "标准 result 输出",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "workflow.result",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1090,
+        "y": 180,
+        "wires": []
+    }
+]

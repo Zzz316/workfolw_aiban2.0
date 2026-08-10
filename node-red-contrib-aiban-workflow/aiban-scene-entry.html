@@ -1,0 +1,48 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-scene-entry", {
+        category: "AiBan",
+        color: "#90DBF4",
+        defaults: {
+            name: { value: "scene entry" },
+            runtimeNodeId: { value: "", required: true },
+            group_id: { value: 1, required: true, validate: RED.validators.number() },
+            scene_id: { value: "", required: true },
+            workflow_id: { value: "", required: true },
+        },
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ["validated", "diagnostics"],
+        icon: "font-awesome/fa-sign-in",
+        paletteLabel: "scene entry",
+        label: function () {
+            return this.name || `${this.group_id}/${this.scene_id}`;
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-scene-entry">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
+        <input type="text" id="node-input-name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-runtimeNodeId"><i class="fa fa-microchip"></i> Runtime 节点 ID</label>
+        <input type="text" id="node-input-runtimeNodeId">
+    </div>
+    <div class="form-row">
+        <label for="node-input-group_id">group_id</label>
+        <input type="number" id="node-input-group_id" min="0">
+    </div>
+    <div class="form-row">
+        <label for="node-input-scene_id">scene_id</label>
+        <input type="text" id="node-input-scene_id">
+    </div>
+    <div class="form-row">
+        <label for="node-input-workflow_id">workflow_id</label>
+        <input type="text" id="node-input-workflow_id">
+    </div>
+</script>
+
+<script type="text/html" data-help-name="aiban-scene-entry">
+    <p>场景 Tab 的入口边界。仅允许与配置的 group_id、scene_id、workflow_id 完全匹配的路由消息通过。</p>
+</script>

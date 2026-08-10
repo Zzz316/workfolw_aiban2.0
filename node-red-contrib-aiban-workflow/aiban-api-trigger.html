@@ -1,0 +1,49 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-api-trigger", {
+        category: "AiBan Workflow",
+        color: "#d7f0d2",
+        defaults: {
+            name: { value: "" },
+            workflowId: { value: "group/1/scene/plug-sequence", required: true },
+            sceneId: { value: "plug-sequence", required: true },
+            triggerId: { value: "external_step" },
+            method: { value: "post" },
+            path: { value: "/aiban/api-trigger/external_step" },
+            groupId: { value: 1 },
+            sourceId: { value: 1 },
+            sourceIdPath: { value: "body.sourceid" },
+            targetStepId: { value: "external_step" },
+            targetStepIdPath: { value: "" },
+            ttlSeconds: { value: 5 },
+            authType: { value: "none" },
+            authHeader: { value: "authorization" },
+            tokenSha256: { value: "" },
+            responseStatus: { value: 200 }
+        },
+        credentials: { authToken: { type: "password" } },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-sign-in",
+        label: function() { return this.name || "aiban api trigger"; },
+        paletteLabel: "api trigger"
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-api-trigger">
+    <div class="form-row"><label for="node-input-name">名称</label><input type="text" id="node-input-name"></div>
+    <div class="form-row"><label for="node-input-workflowId">Workflow</label><input type="text" id="node-input-workflowId"></div>
+    <div class="form-row"><label for="node-input-sceneId">Scene</label><input type="text" id="node-input-sceneId"></div>
+    <div class="form-row"><label for="node-input-method">Method</label><input type="text" id="node-input-method"></div>
+    <div class="form-row"><label for="node-input-path">Path</label><input type="text" id="node-input-path"></div>
+    <div class="form-row"><label for="node-input-groupId">Group</label><input type="number" id="node-input-groupId"></div>
+    <div class="form-row"><label for="node-input-sourceId">Source</label><input type="number" id="node-input-sourceId"></div>
+    <div class="form-row"><label for="node-input-sourceIdPath">Source Path</label><input type="text" id="node-input-sourceIdPath"></div>
+    <div class="form-row"><label for="node-input-targetStepId">Step</label><input type="text" id="node-input-targetStepId"></div>
+    <div class="form-row"><label for="node-input-targetStepIdPath">Step Path</label><input type="text" id="node-input-targetStepIdPath"></div>
+    <div class="form-row"><label for="node-input-authType">Auth</label><input type="text" id="node-input-authType"></div>
+    <div class="form-row"><label for="node-input-authToken">Token</label><input type="password" id="node-input-authToken"></div>
+</script>
+
+<script type="text/html" data-help-name="aiban-api-trigger">
+    <p>Exposes a 2.0 native HTTP trigger and emits <code>workflow.external_event</code> messages.</p>
+</script>

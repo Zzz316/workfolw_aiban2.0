@@ -68,7 +68,7 @@ Phase 1 的自动化测试已通过，Python Runner 与 Node-RED 自定义节点
 
 对应证据：
 
-- `logs/frame_bridge/runtime-20260722-151307-7f59e2d67dde1743.log`
+- `logs/runtime/runtime-20260722-151307-7f59e2d67dde1743.log`
 - `node-red/logs/workflow/workflow-20260722-151311-9332.jsonl`
 
 上述证据证明真实 SDK 帧已进入 Node-RED，但不能单独证明流程终态、截图、数据库落库或长期稳定性。

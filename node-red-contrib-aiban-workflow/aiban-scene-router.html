@@ -1,0 +1,78 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-scene-router", {
+        category: "AiBan",
+        color: "#8ECAE6",
+        defaults: {
+            name: { value: "scene router" },
+            runtimeNodeId: { value: "", required: true },
+            routes: { value: "[]" },
+            outputs: { value: 1 },
+        },
+        inputs: 1,
+        outputs: 1,
+        outputLabels: function (index) {
+            let routes = [];
+            try {
+                routes = JSON.parse(this.routes || "[]");
+            } catch (_) {
+                routes = [];
+            }
+            if (index < routes.length) {
+                const route = routes[index];
+                return `${route.group_id}/${route.scene_id} (${route.route_id})`;
+            }
+            return "diagnostics";
+        },
+        icon: "font-awesome/fa-random",
+        paletteLabel: "scene router",
+        label: function () {
+            return this.name || "scene router";
+        },
+        oneditprepare: function () {
+            $("#node-input-routes").on("change keyup", function () {
+                try {
+                    const routes = JSON.parse($(this).val() || "[]");
+                    $("#node-input-route-count").text(
+                        Array.isArray(routes)
+                            ? `${routes.length} 个场景输出 + 1 个诊断输出`
+                            : "routes 必须是数组"
+                    );
+                } catch (error) {
+                    $("#node-input-route-count").text(`JSON 错误：${error.message}`);
+                }
+            }).trigger("change");
+        },
+        oneditsave: function () {
+            const routes = JSON.parse($("#node-input-routes").val() || "[]");
+            this.outputs = routes.length + 1;
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-scene-router">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
+        <input type="text" id="node-input-name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-runtimeNodeId"><i class="fa fa-microchip"></i> Runtime 节点 ID</label>
+        <input type="text" id="node-input-runtimeNodeId" placeholder="aiban-runtime 节点 ID">
+    </div>
+    <div class="form-row">
+        <label for="node-input-routes"><i class="fa fa-random"></i> 固定路由</label>
+        <textarea id="node-input-routes" rows="10"
+            placeholder='[{"route_id":"plug-sequence","group_id":1,"scene_id":"plug-sequence"}]'></textarea>
+    </div>
+    <div class="form-row">
+        <span id="node-input-route-count" class="form-tips"></span>
+    </div>
+    <div class="form-tips">
+        输出口顺序与数组顺序固定，最后一个输出口始终为诊断。
+        新增场景时需增加路由、连接对应 Tab 并 Deploy；Registry 只决定哪些已配置路由处于活动状态。
+    </div>
+</script>
+
+<script type="text/html" data-help-name="aiban-scene-router">
+    <p>按 Scene Registry 的启用和互斥选择状态，把 Runtime 帧复制到固定输出口。</p>
+    <p>该节点不启动或停止 SDK。无活动场景、未知组、场景停用和未绑定路由都会从最后一个输出口明确报告。</p>
+</script>

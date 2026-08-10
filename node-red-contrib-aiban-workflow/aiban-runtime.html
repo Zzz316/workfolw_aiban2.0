@@ -145,8 +145,19 @@
                 $("#aiban-runtime-actual-state")
                     .text(`${labels[state] || state}${errorText}`)
                     .css("color", colors[state] || "#777");
+                const metadataSummary = status.ready_metadata_summary;
+                const metadataText = metadataSummary
+                    ? ` groups=${metadataSummary.group_count || 0}`
+                        + ` sources=${metadataSummary.source_count || 0}`
+                        + ` models=${metadataSummary.model_count || 0}`
+                        + (
+                            metadataSummary.disabled_group_count
+                                ? ` disabled=${metadataSummary.disabled_group_count}`
+                                : ""
+                        )
+                    : " metadata=未就绪";
                 $("#aiban-runtime-state-detail").text(
-                    `期望=${status.desired_state || "-"} PID=${status.pid || "-"}`
+                    `期望=${status.desired_state || "-"} PID=${status.pid || "-"}${metadataText}`
                 );
                 $("#aiban-runtime-start").prop("disabled", pending || state === "READY");
                 $("#aiban-runtime-stop").prop(

@@ -2,6 +2,10 @@
 
 const path = require("node:path");
 const { MysqlWriteQueue } = require("./lib/mysql-write-queue");
+const {
+    applyNormalizedTerminalResult,
+    normalizeTerminalResultMessage,
+} = require("./lib/result-message");
 
 /**
  * aiban-result-db — Async MySQL Result Writer
@@ -21,7 +25,6 @@ const { MysqlWriteQueue } = require("./lib/mysql-write-queue");
  * Output: same message with db_result block appended
  */
 
-const TERMINAL_STATUSES = ["OK", "NG", "TIMEOUT", "INTERRUPTED"];
 const RECOVERY_EXPIRED_REASON_RE = /Node-RED[\s\S]*Deploy[\s\S]*elapsed=/;
 
 function beijingDateParts(date = new Date()) {
@@ -86,7 +89,7 @@ module.exports = function registerResultDbNode(RED) {
         RED.nodes.createNode(this, config);
         const node = this;
 
-        const tableName = config.tableName || "icamera_data.icam_alarm_data";
+        const tableName = config.tableName || "icamera_data.workflow_result_event";
         const regionName = config.regionName || "";
         const okAlarmContent = config.okAlarmContent || "流程OK";
         const maxRetries = Math.max(1, Number(config.maxRetries) || 3);
@@ -133,17 +136,19 @@ module.exports = function registerResultDbNode(RED) {
             }
 
             try {
-                const abcResult = msg.abc_result;
+                const normalized = normalizeTerminalResultMessage(msg);
 
                 // Only process terminal events (from aiban-result, these are always terminal)
-                if (!abcResult || !TERMINAL_STATUSES.includes(abcResult.result_status)) {
+                if (!normalized.terminal) {
                     // Pass through non-terminal events unchanged
                     send(msg);
                     if (done) done();
                     return;
                 }
+                applyNormalizedTerminalResult(msg, normalized);
+                const abcResult = normalized.abcResult;
 
-                const resultEventId = abcResult.result_event_id || abcResult.event_id || "";
+                const resultEventId = normalized.resultEventId || abcResult.result_event_id || abcResult.event_id || "";
                 if (shouldSkipDbWrite(abcResult)) {
                     msg.db_result = {
                         result_event_id: resultEventId,
@@ -166,45 +171,59 @@ module.exports = function registerResultDbNode(RED) {
 
                 const frame = msg.payload || {};
                 const now = beijingDateParts();
+                const workflowResult = normalized.workflowResult || msg.workflow?.result || {};
+                const workflowOutcome = normalized.workflowOutcome || msg.workflow?.outcome || {};
 
-                // Build the 1.0-compatible business result row for
-                // icamera_data.icam_alarm_data. State-machine persistence stays
-                // in flow-state.db and is intentionally separate from this row.
+                // Persist the standard result contract.  Audit alarm fields
+                // stay inside result_json; the idempotency key and query
+                // dimensions are first-class columns in workflow_result_event.
                 const resultStatus = abcResult.result_status;
                 const row = {
-                    event_id: resultEventId,
                     result_event_id: resultEventId,
+                    event_id: resultEventId,
+                    workflow_id: workflowResult.workflow_id || msg.workflow?.workflow_id
+                        || abcResult.workflow_id || "unknown",
+                    scene_id: workflowResult.scene_id || msg.workflow?.scene_id
+                        || abcResult.scene_id || "default",
                     cycle_id: abcResult.cycle_id,
-                    day: now.day,
-                    time: now.time,
-                    time_division: now.time_division,
-                    time_month: now.time_month,
-                    week: now.week,
-                    region: frame.region || msg.region || regionName,
+                    session_id: abcResult.session_id,
+                    stream_id: abcResult.stream_id,
                     group_id: Number(abcResult.group_id || frame.group_id || msg.aiban?.group_id || 0),
-                    camera_id: Number(abcResult.source_id || frame.source_id || msg.aiban?.source_id || 0),
-                    alarm_content: buildAlarmContent(
-                        resultStatus,
-                        abcResult.failure_reason,
-                        okAlarmContent,
-                        abcResult.missing_step_alarm_name
-                    ),
-                    img_path: normalizeImagePath(
+                    source_id: Number(abcResult.source_id || frame.source_id || msg.aiban?.source_id || 0),
+                    result_status: resultStatus,
+                    failure_reason: abcResult.failure_reason || null,
+                    image_path: normalizeImagePath(
                         abcResult.image_path || frame.image_path || frame.img_path || msg.image_path
                     ),
-                    timedate: now.timedate,
-                    alarm_status: resultStatus === "OK" ? "OK" : "NG",
+                    started_at: workflowOutcome.started_at || abcResult.cycle_started_at || null,
+                    finished_at: workflowOutcome.finished_at || abcResult.cycle_finished_at
+                        || `${now.day}T${now.time}+08:00`,
+                    duration_ms: workflowOutcome.duration_ms ?? abcResult.cycle_duration_ms ?? null,
+                    created_at: `${now.day}T${now.time}+08:00`,
+                    result_json: {
+                        result: workflowResult,
+                        outcome: workflowOutcome,
+                        audit_alarm: {
+                            region: frame.region || msg.region || regionName,
+                            alarm_content: buildAlarmContent(
+                                resultStatus,
+                                abcResult.failure_reason,
+                                okAlarmContent,
+                                abcResult.missing_step_alarm_name
+                            ),
+                            alarm_status: resultStatus === "OK" ? "OK" : "NG",
+                        },
+                    },
                 };
 
-                // Enqueue for async write
-                writeQueue.enqueue(row);
-                writeCount++;
+                const queueResult = writeQueue.enqueue(row);
+                if (queueResult.accepted) writeCount++;
 
                 // Attach db_result to msg
                 msg.db_result = {
                     result_event_id: resultEventId,
                     event_id: resultEventId,  // backward compat alias
-                    status: "queued",
+                    status: queueResult.status,
                     db_write_duration_ms: null,
                     attempts: 0,
                     table: tableName,
@@ -225,7 +244,9 @@ module.exports = function registerResultDbNode(RED) {
                 send(msg);
             } catch (error) {
                 node.error(`result-db error: ${error.message}`, msg);
-                const fallbackEventId = msg.abc_result?.result_event_id
+                const fallbackEventId = msg.workflow?.result?.result_event_id
+                    || msg.workflow?.outcome?.compatibility?.abc_result_event_id
+                    || msg.abc_result?.result_event_id
                     || msg.abc_result?.event_id || "";
                 msg.db_result = {
                     result_event_id: fallbackEventId,
@@ -265,7 +286,7 @@ module.exports = function registerResultDbNode(RED) {
         color: "#90EE90",
         defaults: {
             name: { value: "结果入库" },
-            tableName: { value: "icamera_data.icam_alarm_data" },
+            tableName: { value: "icamera_data.workflow_result_event" },
             regionName: { value: "" },
             okAlarmContent: { value: "流程OK" },
             dbHost: { value: "127.0.0.1" },

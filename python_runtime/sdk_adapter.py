@@ -65,6 +65,8 @@ class MockAibanSDK:
         self.fail_config_check = self._config.get("fail_config_check", False)
         self.fail_build_pipeline = self._config.get("fail_build_pipeline", False)
         self.sdk_event_messages = self._config.get("sdk_event_messages", [])
+        self._paused_sources = set()
+        self._pause_lock = threading.Lock()
 
     def registerVideoResultFunc(self, cb: FrameCallback) -> None:
         self._frame_cb = cb
@@ -99,6 +101,12 @@ class MockAibanSDK:
         logger.info("Mock SDK: stopPipline OK")
 
     def sourceControl(self, group_id: int, source_id: int, b_run: bool) -> None:
+        key = (int(group_id), int(source_id))
+        with self._pause_lock:
+            if b_run:
+                self._paused_sources.discard(key)
+            else:
+                self._paused_sources.add(key)
         logger.info(
             "Mock SDK: sourceControl group=%d source=%d run=%s",
             group_id, source_id, b_run,
@@ -113,6 +121,9 @@ class MockAibanSDK:
             if self._frame_cb:
                 for group_id in range(1, self.num_groups + 1):
                     for source_id in range(1, self.num_sources + 1):
+                        with self._pause_lock:
+                            if (group_id, source_id) in self._paused_sources:
+                                continue
                         metadata = MockMetadata(
                             group_id, source_id,
                             self.model_ids, self.labels, counter,
@@ -150,8 +161,12 @@ class MockMetadata:
             return (False, [])
         boxes = []
         for idx, label in enumerate(self._labels):
-            # Cycle through labels so each frame has some variety
-            if (self._counter + idx) % len(self._labels) == self._counter % len(self._labels):
+            # Emit one deterministic label per frame and cycle through the
+            # configured sequence.  The previous expression simplified to
+            # ``idx % len(labels) == 0`` and therefore emitted only the first
+            # label forever, which made the T16 mock path incapable of
+            # exercising an A -> B -> C closed loop.
+            if idx == self._counter % len(self._labels):
                 boxes.append(MockBox(
                     label=label,
                     label_index=idx,

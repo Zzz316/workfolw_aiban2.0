@@ -60,7 +60,7 @@ function makeFrame(overrides = {}) {
             source_id: d.source_id,
             // Models (new format from aiban-runtime)
             models: {},
-            // Legacy (no longer populated by aiban-runtime, kept for compat)
+            // Alternate input names for imported flows.
             labels: [],
             label_summary: "",
         },

@@ -1,0 +1,29 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-api-output", {
+        category: "艾班工作流",
+        color: "#F7C873",
+        defaults: {
+            name: { value: "幂等 API 输出" },
+            url: { value: "http://127.0.0.1:6090/workflow/result", required: true },
+            channel: { value: "" },
+            timeoutMs: { value: 5000, validate: RED.validators.number() },
+            maxAttempts: { value: 3, validate: RED.validators.number() },
+            retryDelayMs: { value: 250, validate: RED.validators.number() }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "font-awesome/fa-cloud-upload",
+        label: function () { return this.name || "幂等 API 输出"; }
+    });
+</script>
+<script type="text/html" data-template-name="aiban-api-output">
+    <div class="form-row"><label>名称</label><input type="text" id="node-input-name"></div>
+    <div class="form-row"><label>URL</label><input type="text" id="node-input-url"></div>
+    <div class="form-row"><label>通道标识</label><input type="text" id="node-input-channel" placeholder="留空使用节点 ID"></div>
+    <div class="form-row"><label>超时(ms)</label><input type="number" id="node-input-timeoutMs"></div>
+    <div class="form-row"><label>最大尝试</label><input type="number" id="node-input-maxAttempts"></div>
+    <div class="form-row"><label>重试间隔</label><input type="number" id="node-input-retryDelayMs"></div>
+</script>
+<script type="text/html" data-help-name="aiban-api-output">
+    <p>只消费标准 terminal result。请求携带 Idempotency-Key，并用本地 SQLite ledger 防止重复通知。</p>
+</script>

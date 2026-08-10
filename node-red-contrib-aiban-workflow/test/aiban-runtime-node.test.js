@@ -87,7 +87,23 @@ function makeReadyEvent(overrides = {}) {
         event_seq,
         emitted_at: new Date().toISOString(),
         payload: {
-            groups: [1],
+            groups: [{
+                group_id: 1,
+                group_id_str: "1",
+                name: "test-group-1",
+                enabled: true,
+                sources: [{
+                    source_id: 1,
+                    source_id_str: "1",
+                    name: "test-source-1",
+                    enabled: true,
+                    config_path: "",
+                    config_path_normalized: "",
+                }],
+                infers: [{model_id: 1, model_id_str: "1", enabled: true}],
+                model_ids: [1],
+                model_id_strs: ["1"],
+            }],
             sources_per_group: {"1": [1]},
             models_loaded: ["1"],
             ...payloadOverrides,
@@ -267,6 +283,89 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         assert.ok(lastStatus.text.includes("ready"));
         assert.equal(node.getRuntimeStatus().actual_state, RuntimeState.READY);
         assert.equal(node.getRuntimeStatus().session_id, "test-session-001");
+        assert.equal(node.getRuntimeStatus().ready_metadata_summary.group_count, 1);
+
+        node._onClose(false, () => {});
+    });
+
+    test("3b. runtime_ready metadata is cached for status and heartbeat summary", async () => {
+        const { node, proc } = await bootNode(registry, mockSpawn, { autoStart: false });
+
+        const readyEvent = makeReadyEvent({
+            event_seq: 5,
+            groups: [
+                {
+                    group_id: 7,
+                    group_id_str: "7",
+                    name: "line-7",
+                    enabled: true,
+                    sources: [
+                        { source_id: 701, source_id_str: "701", enabled: true },
+                        { source_id: 702, source_id_str: "702", enabled: true },
+                    ],
+                    infers: [{ model_id: 11, model_id_str: "11", enabled: true }],
+                    model_ids: [11],
+                    model_id_strs: ["11"],
+                },
+                {
+                    group_id: 8,
+                    group_id_str: "8",
+                    name: "disabled-line",
+                    enabled: false,
+                    sources: [{ source_id: 801, source_id_str: "801", enabled: true }],
+                    infers: [{ model_id: 12, model_id_str: "12", enabled: true }],
+                    model_ids: [12],
+                    model_id_strs: ["12"],
+                },
+            ],
+            sources_per_group: { "7": [701, 702], "8": [801] },
+            models_loaded: ["11", "12"],
+            models: [
+                { model_id: 11, model_id_str: "11", model_path: "models\\a.onnx" },
+                { model_id: 12, model_id_str: "12", model_path: "D:\\models\\b.onnx" },
+            ],
+            pipeline_config: {
+                schema_version: "pipeline-config/v1",
+                config_path: "main-flow.yaml",
+                config_path_normalized: "D:\\AiBan\\abvideo\\main-flow.yaml",
+                disabled_groups: [8],
+            },
+        });
+
+        emitEvent(proc, readyEvent);
+        await delay(50);
+
+        const status = node.getRuntimeStatus();
+        assert.equal(status.ready_metadata.session_id, "test-session-001");
+        assert.equal(status.ready_metadata.event_id, "evt-ready");
+        assert.equal(status.ready_metadata.event_seq, 5);
+        assert.equal(status.ready_metadata.groups[0].group_id, 7);
+        assert.deepEqual(status.ready_metadata.sources_per_group, { "7": [701, 702], "8": [801] });
+        assert.equal(status.ready_metadata.models[1].model_path, "D:\\models\\b.onnx");
+        assert.equal(status.ready_metadata.pipeline_config.schema_version, "pipeline-config/v1");
+        assert.deepEqual(status.ready_metadata_summary, {
+            schema_version: "pipeline-config/v1",
+            session_id: "test-session-001",
+            event_seq: 5,
+            group_count: 2,
+            enabled_group_count: 1,
+            disabled_group_count: 1,
+            disabled_groups: [8],
+            source_count: 3,
+            model_count: 2,
+            models_loaded: ["11", "12"],
+        });
+
+        status.ready_metadata.groups[0].name = "mutated";
+        assert.equal(node.getRuntimeStatus().ready_metadata.groups[0].name, "line-7");
+
+        emitEvent(proc, makeHeartbeatEvent({ event_seq: 6 }));
+        await delay(50);
+        const heartbeatStatus = getPortMessages(node, 1)
+            .find(msg => msg.aiban && msg.aiban.status_type === "heartbeat");
+        assert.equal(heartbeatStatus.aiban.ready_metadata_summary.group_count, 2);
+        assert.equal(heartbeatStatus.aiban.ready_metadata_summary.source_count, 3);
+        assert.equal(heartbeatStatus.payload.groups, undefined);
 
         node._onClose(false, () => {});
     });
@@ -995,6 +1094,8 @@ describe("aiban-runtime node", { concurrency: 1 }, () => {
         assert.equal(response.body.action, "status");
         assert.equal(response.body.actual_state, RuntimeState.READY);
         assert.equal(response.body.session_id, "test-session-001");
+        assert.equal(response.body.ready_metadata.groups[0].group_id, 1);
+        assert.equal(response.body.ready_metadata_summary.group_count, 1);
 
         node._onClose(false, () => {});
     });

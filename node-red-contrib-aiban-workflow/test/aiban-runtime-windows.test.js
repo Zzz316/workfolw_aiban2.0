@@ -11,9 +11,12 @@ const { RuntimeState } = require("../lib/runtime-controller");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
 const RUNNER_PATH = path.join(PROJECT_ROOT, "python_runtime", "aiban_runner.py");
+const PREFERRED_WINDOWS_PYTHON = "D:/my_env/python.exe";
 const KNOWN_WINDOWS_PYTHON = "C:/Users/s2017088/AppData/Local/Programs/Python/Python39/python.exe";
 const PYTHON = process.env.AIBAN_TEST_PYTHON
-    || (fs.existsSync(KNOWN_WINDOWS_PYTHON) ? KNOWN_WINDOWS_PYTHON : "python");
+    || (fs.existsSync(PREFERRED_WINDOWS_PYTHON)
+        ? PREFERRED_WINDOWS_PYTHON
+        : (fs.existsSync(KNOWN_WINDOWS_PYTHON) ? KNOWN_WINDOWS_PYTHON : "python"));
 
 function waitUntil(predicate, timeoutMs, description) {
     const startedAt = Date.now();

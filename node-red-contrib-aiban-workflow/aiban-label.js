@@ -37,6 +37,11 @@ module.exports = function registerLabelNode(RED) {
         let totalFrames = 0;
 
         node.on("input", function onInput(msg, send, done) {
+            if (msg.topic === "aiban-interrupt") {
+                send(msg);
+                if (done) done();
+                return;
+            }
             totalFrames++;
             const matchStart = process.hrtime.bigint();
 

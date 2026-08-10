@@ -585,7 +585,7 @@ describe("aiban-runtime Phase 1", { concurrency: 1 }, () => {
         proc.kill();
 
         // There should be NO drops counter > 0 in health checks
-        // (The queue drops property is legacy; new code uses overflow_count)
+        // (The queue drops property is an alternate metric; current code uses overflow_count)
         const healthResults = events.filter(
             e => e.type === "command_result" && e.payload.command === "health"
         );

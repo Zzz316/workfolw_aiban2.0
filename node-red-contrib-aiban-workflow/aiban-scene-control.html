@@ -1,0 +1,48 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-scene-control", {
+        category: "AiBan",
+        color: "#BDE0FE",
+        defaults: {
+            name: { value: "scene control" },
+            runtimeNodeId: { value: "", required: true },
+            action: { value: "" },
+        },
+        inputs: 1,
+        outputs: 2,
+        outputLabels: ["result", "error"],
+        icon: "font-awesome/fa-toggle-on",
+        paletteLabel: "scene control",
+        label: function () {
+            return this.name || "scene control";
+        },
+    });
+</script>
+
+<script type="text/html" data-template-name="aiban-scene-control">
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
+        <input type="text" id="node-input-name">
+    </div>
+    <div class="form-row">
+        <label for="node-input-runtimeNodeId"><i class="fa fa-microchip"></i> Runtime 节点 ID</label>
+        <input type="text" id="node-input-runtimeNodeId">
+    </div>
+    <div class="form-row">
+        <label for="node-input-action"><i class="fa fa-bolt"></i> 默认动作</label>
+        <select id="node-input-action">
+            <option value="">从 msg.payload.action 读取</option>
+            <option value="enable">enable</option>
+            <option value="disable">disable</option>
+            <option value="select">select</option>
+            <option value="status">status</option>
+        </select>
+    </div>
+    <div class="form-tips">
+        enable/disable 需携带 revision；select 需携带 selection_revision。
+        该节点只修改 Scene Registry，不控制 Runtime 或 SDK。
+    </div>
+</script>
+
+<script type="text/html" data-help-name="aiban-scene-control">
+    <p>通过消息控制场景启用、停用和互斥选择。输出 1 为成功，输出 2 为明确错误。</p>
+</script>

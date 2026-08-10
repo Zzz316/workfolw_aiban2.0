@@ -1,7 +1,7 @@
 # AiBan Workflow 2.0 开发任务说明书
 
-> 文档版本：v1.0.5<br>
-> 更新日期：2026-07-22<br>
+> 文档版本：v1.0.15<br>
+> 更新日期：2026-08-09<br>
 > 上位计划：[`WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md`](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md)<br>
 > 使用方式：每次只领取一个主任务；开始前核对依赖，结束时按验收标准提交证据。
 
@@ -74,7 +74,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 - 产品确认、现场 SDK、摄像头、MySQL 和外部接口能够按任务窗口提供。
 - 日期未扣除法定节假日、请假和外部等待时间。
 - “剩余人日”已经考虑现有代码的可复用程度，不是从零开发的总人日。
-- T04 完成后剩余基准串行计划为 91 人日，功能和发布任务计划完成日仍为 2026-12-15。
+- T15 完成后剩余基准串行计划为 52 人日，功能和发布任务计划完成日仍为 2026-12-15。
 - 另保留约 15% 风险缓冲，管理目标完成日为 2026-12-31。
 
 如果投入 2 名开发并提供独立测试/现场支持，T01～T04 与 T05～T08、T09～T10 与 T11～T12 可以并行，预计可将总日历周期缩短到约 16 周；不得通过并行跳过共同协议门禁。
@@ -106,11 +106,11 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 
 ### 2.4 当前总体判断
 
-- 项目整体成熟度：约 **43%（±5%）**。
-- 单 Runtime + 单线性顺序场景：约 **85%**。
-- 多 group、多 scene 平台能力：约 **10%**。
-- 1.0 全业务功能对等迁移：约 **20%**。
-- 生产发布成熟度：约 **15%**。
+- 项目整体成熟度：约 **86%（±5%）**。
+- 单 Runtime + 首个独立场景：约 **97%**。
+- 多 group、多 scene 平台能力：约 **72%**。
+- 2.0 原生业务能力：约 **100%**（Sequence、Monitor、Timer、Custom Flow、API Trigger、API Output、Socket Output 开发和自动化完成，现场映射仍需复核）。
+- 生产发布成熟度：约 **55%**（T22 门禁工具和文档完成；T16 真实 SDK 因原生 DLL 失败未 READY，真实 MySQL/API、24h 和现场签字待验收）。
 
 ---
 
@@ -120,15 +120,15 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 |---|---|---:|---|---|---:|---|---|
 | M0 基线与文档 | T00 | 100% | 91/91 全量测试、30/30 Phase 2、基线报告及状态文档已完成 | 无 | 0 | 07-23～07-24；实际 07-22 | 07-22 |
 | M1 Runtime 生命周期 | T01～T04 | 100% | 六态、统一入口、restart/PID、故障矩阵、Windows 真进程及 125 项回归全部通过 | 无 | 0 | 计划 07-27～08-10；实际 07-22 | 07-22 |
-| M2 结果协议与分层 | T05～T08 | 55% | 线性 FlowRuntime、OK/NG/TIMEOUT、审计和截图已存在 | outcome 契约、双模式结果、复杂逻辑入口 | 13 | 08-11～08-27 | 08-27 |
-| M3 Group 元数据 | T09～T10 | 10% | 已有 pipelineConfig 和临时 ready 字段 | YAML 权威解析、真实 group/source/model | 5 | 08-28～09-03 | 09-03 |
-| M3 Scene Registry/前端 | T11～T13 | 20% | scene-manager localStorage Demo 已存在 | 后端存储、API、权限、真实启停和冲突处理 | 12 | 09-04～09-21 | 09-21 |
-| M4 Scene 路由/子流程 | T14～T15 | 5% | 只有规划和当前单链 flow | control/router/entry、隔离、首场景迁移 | 9 | 09-22～10-02 | 10-02 |
-| M5 真实生产闭环 | T16～T18 | 30% | Runtime 和 result-db 有自动化基础 | 真实场景、MySQL、外部副作用、24h 和恢复 | 12 | 10-05～10-20 | 10-20 |
-| M6 Sequence 完整能力 | T19 | 25% | 线性有序步骤已完成 | 缺步/数量/API/循环/guard 等 | 10 | 10-21～11-03 | 11-03 |
-| M6 Monitor/Timer | T20 | 15% | 仓库有旧节点和 1.0 参考实现 | 新 outcome、scene 隔离、恢复和现场验证 | 10 | 11-04～11-17 | 11-17 |
-| M6 Custom Flow | T21 | 5% | 只有旧引擎和设计参考 | 安全扩展模型、变量/timer/guard、真实迁移 | 10 | 11-18～12-01 | 12-01 |
-| M7 运维与发布 | T22 | 15% | 有部分日志、测试报告和运维文档 | 看板、双跑、备份、回退、发布验收 | 10 | 12-02～12-15 | 12-15 |
+| M2 结果协议与分层 | T05～T08 | 100% | outcome/result 契约、SequenceRuntime 公共边界、aiban-result 双模式出口、result-db 兼容、迁移说明、示例 flow；142/142 Node 测试通过 | 无 | 0 | 计划 08-11～08-27；实际 07-24 | 07-24 |
+| M3 Group 元数据 | T09～T10 | 100% | Python 权威解析器、脱敏 YAML 夹具、Runner ready metadata、Node-RED 状态接口缓存、编辑器摘要、31/31 Python 和 143/143 Node 测试通过 | 无 | 0 | 计划 08-28～09-03；实际 07-24 | 07-24 |
+| M3 Scene Registry/前端 | T11～T13 | 100% | SQLite Store/API、revision、权限、真实前端客户端和浏览器验收完成 | 真实现场账号权限仍在 T16 复核 | 0 | 计划 09-04～09-21；实际 07-29 | 07-29 |
+| M4 Scene 路由/子流程 | T14～T15 | 100% | control/router/entry、固定端口、隔离、中断语义、首场景迁移和 Mock 示例完成 | 真实 SDK 帧闭环属于 T16 | 0 | 计划 09-22～10-02；实际 07-29 | 07-29 |
+| M5 真实生产闭环 | T16～T18 | 65% | T16 Mock 闭环和验证器完成；T17 schema/幂等队列/API ledger 完成；T18 24h harness 与短时双 source 冒烟完成；Node 全量 218/218 | 真实 SDK 原生 DLL 修复、真实 MySQL/API、24h 和完整故障矩阵 | 7 | 10-05～10-20 | 10-20 |
+| M6 Sequence 完整能力 | T19 | 100% | 独立 Advanced Sequence 规则层、持久状态、10/10 专项和示例完成 | 现场标签映射复核 | 0 | 计划 10-21～11-03；开发实际 08-01 | 08-01 |
+| M6 Monitor/Timer | T20 | 100% | 独立 Monitor/Timer Record 规则层、恢复/中断策略、10/10 专项和示例完成 | 现场 scene/业务表绑定复核 | 0 | 计划 11-04～11-17；开发实际 08-01 | 08-01 |
+| M6 Custom Flow | T21 | 100% | `aiban-custom-flow`、受控 JSON DSL、变量/timer/guard、示例 flow、8 项专项完成 | 现场 Custom Flow 标签/业务表映射复核 | 0 | 计划 11-18～12-01；开发实际 08-09 | 08-09 |
+| M7 运维与发布 | T22 | 100% | `tools/release_gate.js`、发布门禁文档和专项完成；当前门禁能明确阻塞未验收现场项 | 正式发布仍需 T16～T18 和现场签字通过 | 0 | 计划 12-02～12-15；开发实际 08-09 | 08-09 |
 
 模块进度每完成一个任务或现场验收后更新一次；只修改百分比但没有证据链接或测试结果视为无效更新。
 
@@ -161,24 +161,24 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 | T02 | 统一按钮、HTTP 和消息控制入口 | P0 | 100% | DONE | 0 | 计划 07-30～08-03；实际 07-22 | T01 | 提交 `7ac8f59`；三入口、状态 API、操作反馈和编辑器控件完成 |
 | T03 | 修复 restart 与进程回收 | P0 | 100% | DONE | 0 | 计划 08-04～08-05；实际 07-22 | T01 | 提交 `f242d15`；两次 READY、重启后帧/存活、新 PID/session、单进程及强杀审计已验证 |
 | T04 | 生命周期故障矩阵与 Windows 验收 | P0 | 100% | DONE | 0 | 计划 08-06～08-10；实际 07-22 | T02、T03 | 提交 `f83ccb8`；125/125、Windows 真 PID 替换/删除回收、前后 0 孤儿通过 |
-| T05 | 冻结 workflow outcome/result 契约 | P0 | 20% | READY | 2 | 08-11～08-12 | T00 | 已有 abc_result，但无通用 outcome 契约；按主线顺序暂不领取 |
-| T06 | 提取线性顺序引擎公共边界 | P0 | 50% | TODO | 3 | 08-13～08-17 | T05 | FlowRuntime 已在 lib 中，但仍与 result 行为绑定 |
-| T07 | aiban-result 双模式结果出口 | P0 | 35% | TODO | 5 | 08-18～08-24 | T06 | 简单顺序模式已存在，outcome 模式未实现 |
-| T08 | 结果兼容、复杂逻辑和迁移测试 | P0 | 30% | TODO | 3 | 08-25～08-27 | T07 | 线性测试完善，复杂逻辑/双模式测试缺失 |
-| T09 | 解析真实 Pipeline group 元数据 | P1 | 5% | TODO | 3 | 08-28～09-01 | T04 | 当前只有配置路径，无权威解析器 |
-| T10 | runtime_ready 输出真实 group/source/model | P1 | 10% | TODO | 2 | 09-02～09-03 | T09 | ready 字段存在但 group 数据写死 |
-| T11 | Scene Registry 存储层 | P1 | 5% | TODO | 4 | 09-04～09-09 | T05 | 只有前端 localStorage 数据结构 |
-| T12 | Scene Registry API 和权限 | P1 | 0% | TODO | 4 | 09-10～09-15 | T11 | 尚无正式接口和权限模型 |
-| T13 | scene-manager 接入正式 API | P1 | 25% | TODO | 4 | 09-16～09-21 | T10、T12 | 静态页面、CRUD Demo 和跳转已存在 |
-| T14 | scene-control 与 scene-router | P1 | 0% | TODO | 5 | 09-22～09-28 | T10、T12 | 仅有规划，无节点实现 |
-| T15 | scene-entry 与首场景迁移 | P1 | 10% | TODO | 4 | 09-29～10-02 | T08、T14 | 单链 flow 已有，尚未拆成 scene 子流程 |
-| T16 | 真实 SDK 首场景闭环验证 | P1 | 15% | TODO | 3 | 10-05～10-07 | T15 | Runtime 有真实 SDK 基础，scene 闭环证据未固化 |
-| T17 | MySQL 幂等与首个副作用闭环 | P1 | 30% | TODO | 4 | 10-08～10-13 | T16 | result-db 和队列测试已有，真实 MySQL 未验收 |
-| T18 | 稳定性、故障恢复和阶段报告 | P1 | 10% | TODO | 5 | 10-14～10-20 | T17 | 有局部错误测试，无 24h/全链路恢复报告 |
-| T19 | 补齐 Sequence 业务能力 | P2 | 25% | TODO | 10 | 10-21～11-03 | T08、T15 | 有序线性步骤已实现，其余能力待拆分 |
-| T20 | 迁移 Monitor 与 Timer Record | P2 | 15% | TODO | 10 | 11-04～11-17 | T08、T15 | 旧节点和 1.0 实现可参考，未接新契约 |
-| T21 | Custom Flow 受控扩展 | P2 | 5% | TODO | 10 | 11-18～12-01 | T20 | 只有旧引擎参考，需重新设计安全边界 |
-| T22 | 运行管理、双跑、回退和发布 | P1 | 15% | TODO | 10 | 12-02～12-15 | T18、T19～T21 | 有部分日志/文档，未形成发布闭环 |
+| T05 | 冻结 workflow outcome/result 契约 | P0 | 100% | DONE | 0 | 计划 08-11～08-12；实际 07-24 | T00 | `workflow-contract`、`workflow.outcome/result`、截图失败记录和契约测试完成；134/134 Node 测试通过 |
+| T06 | 提取线性顺序引擎公共边界 | P0 | 100% | DONE | 0 | 计划 08-13～08-17；实际 07-24 | T05 | 新增 `SequenceRuntime`/`TopologyCompiler` 公共入口；顺序引擎可不加载 Node-RED 独立测试，终态输出标准 outcome |
+| T07 | aiban-result 双模式结果出口 | P0 | 100% | DONE | 0 | 计划 08-18～08-24；实际 07-24 | T06 | `simple-sequence` 与 `outcome` 双模式完成；手工 OK/NG/TIMEOUT/INTERRUPTED、重复终态、截图失败和 result_event_id mismatch 测试通过 |
+| T08 | 结果兼容、复杂逻辑和迁移测试 | P0 | 100% | DONE | 0 | 计划 08-25～08-27；实际 07-24 | T07 | 新旧模式示例 flow、迁移说明、result-db 标准 outcome 兼容和 Phase 2 测试报告完成；142/142 Node 测试通过 |
+| T09 | 解析真实 Pipeline group 元数据 | P1 | 100% | DONE | 0 | 计划 08-28～09-01；实际 07-24 | T04 | 新增 `python_runtime/pipeline_config.py`，解析 `GroupArrary/Sources/Infers/ModelArrary`，覆盖多 group、多 source、禁用 group 和配置错误 |
+| T10 | runtime_ready 输出真实 group/source/model | P1 | 100% | DONE | 0 | 计划 09-02～09-03；实际 07-24 | T09 | Node-RED 已缓存最近 `runtime_ready` metadata，状态接口返回 `ready_metadata` / `ready_metadata_summary`，heartbeat 只带轻量摘要 |
+| T11 | Scene Registry 存储层 | P1 | 100% | DONE | 0 | 计划 09-04～09-09；实际 07-29 | T05 | SQLite 持久化、唯一键、Scene/selection revision、审计和异常校验完成 |
+| T12 | Scene Registry API 和权限 | P1 | 100% | DONE | 0 | 计划 09-10～09-15；实际 07-29 | T11 | metadata/CRUD/enable/select/history/tab API、三类 Scene 权限及 Runtime 隔离完成；Node 153/153 |
+| T13 | scene-manager 接入正式 API | P1 | 100% | DONE | 0 | 计划 09-16～09-21；实际 07-29 | T10、T12 | 默认真实 API、revision 错误、三类状态、Tab 限定和显式 Demo 完成；浏览器验收通过 |
+| T14 | scene-control 与 scene-router | P1 | 100% | DONE | 0 | 计划 09-22～09-28；实际 07-29 | T10、T12 | 固定端口 Router、Control、独立副本、中断与 diagnostics 完成 |
+| T15 | scene-entry 与首场景迁移 | P1 | 100% | DONE | 0 | 计划 09-29～10-02；实际 07-29 | T08、T14 | 入口身份、TopologyCompiler、INTERRUPTED、双 Tab flow 和 Mock 示例完成；Node 163/163 |
+| T16 | 真实 SDK 首场景闭环验证 | P1 | 65% | DOING | 1 | 10-05～10-07 | T15 | Mock 验证 17/17、Node 专项 12/12；真实 YAML 解析成功，但 `libAiBanVideoPy3_9` 原生 DLL 初始化失败，未到 READY |
+| T17 | MySQL 幂等与首个副作用闭环 | P1 | 75% | DOING | 2 | 10-08～10-13 | T16 | UNIQUE schema、队列/重试/重放、API ledger 和 9/9 专项完成；真实 MySQL/API 待验收 |
+| T18 | 稳定性、故障恢复和阶段报告 | P1 | 45% | DOING | 4 | 10-14～10-20 | T17 | 24h harness、指标测试和短时双 source 冒烟完成；24h/外部故障矩阵未执行 |
+| T19 | 补齐 Sequence 业务能力 | P2 | 100% | DONE | 0 | 计划 10-21～11-03；开发实际 08-01 | T08、T15 | Advanced Sequence 独立规则层、持久化、全部候选能力、10/10 专项和示例完成 |
+| T20 | 迁移 Monitor 与 Timer Record | P2 | 100% | DONE | 0 | 计划 11-04～11-17；开发实际 08-01 | T08、T15 | Monitor/Timer Record 独立规则层、scene/outcome、恢复/中断、10/10 专项和示例完成 |
+| T21 | Custom Flow 受控扩展 | P2 | 100% | DONE | 0 | 计划 11-18～12-01；开发实际 08-09 | T20 | 新增 `CustomFlowRuntime` 和 `aiban-custom-flow`，变量/timer/guard/恢复/中断/安全边界 8 项专项及示例完成 |
+| T22 | 运行管理、双跑、回退和发布 | P1 | 100% | DONE | 0 | 计划 12-02～12-15；开发实际 08-09 | T18、T19～T21 | 新增发布门禁工具和文档；当前门禁阻塞 T16～T18 现场验收和签字，不允许误发 v2.0.0 |
 
 计划日期是基准窗口。任务进入 `BLOCKED`、实际人日偏差超过 30% 或依赖延迟超过 2 个开发日时，必须更新本表和里程碑日期。
 
@@ -190,7 +190,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 
 **目标**
 
-建立一个与当前代码一致的事实基线，避免后续继续引用旧 ZMQ、旧测试数量或未验证结论。
+建立一个与当前代码一致的事实基线，避免后续继续引用旧测试数量或未验证结论。
 
 **工作范围**
 
@@ -200,7 +200,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 - 更新以下文档的状态和入口：
   - `README.md`
   - `docs/REAL_SDK_TEST.md`
-  - `docs/WORKFLOW_1_0_PARITY_MATRIX.md`
+  - `docs/WORKFLOW_V2_PARITY.md`
   - `docs/TEST_REPORT_V2_PHASE_1.md`
   - `docs/TEST_REPORT_V2_PHASE_2.md`
 - 新增或更新一份带日期的基线记录，禁止把未执行的现场测试写成已通过。
@@ -208,7 +208,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 **不在范围内**
 
 - 不修改 Runtime 或业务逻辑代码。
-- 不清理旧代码文件。
+- 清理不属于 2.0 发布面的旧组件时，必须同步测试和发布门禁。
 
 **验收标准**
 
@@ -232,7 +232,7 @@ npm.cmd test
 **完成记录（2026-07-22）**
 
 - 全量测试 91 / 91 通过，Phase 2 专项测试 30 / 30 通过。
-- 已更新 README、真实 SDK 指南、Phase 1/2 报告和 1.0→2.0 能力矩阵。
+- 已更新 README、真实 SDK 指南、Phase 1/2 报告和 2.0 功能清单。
 - 已新增 [`docs/BASELINE_2026-07-22.md`](docs/BASELINE_2026-07-22.md)，明确真实证据与未验证项。
 - 实际完成日期早于基准排期，T01 依赖已解除。
 
@@ -437,7 +437,7 @@ npm.cmd test
 
 **目标**
 
-定义逻辑层向结果层提交终态的唯一协议，并明确兼容旧 `abc_result` 的方式。
+定义逻辑层向结果层提交终态的唯一协议。
 
 **建议修改范围**
 
@@ -462,6 +462,13 @@ npm.cmd test
 - 契约测试能够拒绝非法 status、缺失身份字段和无效时间。
 
 **依赖**：T00。
+
+**完成记录（2026-07-24）**
+
+- 新增 `lib/workflow-contract.js`，冻结 `workflow-outcome/v1` 与 `workflow-result/v1` 契约。
+- `aiban-result` 终态消息新增 `msg.workflow.outcome` 与 `msg.workflow.result`，并保留 `msg.abc_result` 兼容层。
+- 截图失败默认不阻止结果输出，错误写入 `workflow.outcome.evidence.screenshot_error`。
+- 新增 `test/workflow-contract.test.js`，覆盖非法 status、缺失身份字段、无效时间、`abc_result` 审计镜像归一化和重复 outcome 去重。
 
 ---
 
@@ -493,6 +500,12 @@ npm.cmd test
 - 业务终态符合 T05 outcome 契约。
 
 **依赖**：T05。
+
+**完成记录（2026-07-24）**
+
+- 新增 `lib/sequence-runtime.js` 和 `lib/topology-compiler.js` 作为公共入口；旧 `lib/flow-runtime.js` 继续兼容导出。
+- 顺序引擎终态事件直接携带标准 `outcome`，结果审计字段由统一 result 层生成。
+- 新增 `test/sequence-runtime-boundary.test.js`，使用内存状态存储验证不加载 Node-RED 的 OK 和 INTERRUPTED outcome。
 
 ---
 
@@ -536,6 +549,14 @@ npm.cmd test
 
 **依赖**：T06。
 
+**完成记录（2026-07-24）**
+
+- `aiban-result` 新增 `mode` 配置，默认 `simple-sequence` 保持旧线性链行为；`outcome` 模式直接接收 `msg.workflow.outcome`。
+- outcome 模式不反向解析拓扑，负责校验 outcome、生成或校验 `result_event_id`、终态去重、按需截图、审计和统一输出。
+- 重复 outcome 在截图前被去重，不会重复触发截图或下游副作用。
+- 截图失败不会丢失最终结果，错误写入 `workflow.outcome.evidence.screenshot_error` 和 `workflow.result.screenshot_error`。
+- 新增 `test/aiban-result-outcome-mode.test.js`，覆盖手工 OK/NG/TIMEOUT/INTERRUPTED、重复终态、截图失败和错误 `result_event_id`。
+
 ---
 
 ### T08 结果兼容、复杂逻辑和迁移测试
@@ -555,15 +576,24 @@ npm.cmd test
 - 两个并行逻辑只提交一个终态。
 - 截图成功、失败和超时。
 - result_event_id 重放。
-- 旧 `abc_result.event_id` 兼容读取。
+- `abc_result.event_id` 审计别名读取。
 
 **交付物**
 
 - 新旧模式示例 flow。
-- 迁移说明：现有场景是否需要改线、改哪些配置。
+- 接入说明：现有场景如何切换到 outcome/result 模式。
 - 更新 Phase 2 测试报告。
 
 **依赖**：T07。
+
+**完成记录（2026-07-24）**
+
+- 新增 `lib/result-message.js`，统一归一化 `workflow.outcome/result` 与旧 `abc_result` 终态消息。
+- `aiban-result-db` 可直接消费标准 `msg.workflow.outcome/result`，并读取 `abc_result.event_id` 审计别名。
+- 新增 `test/aiban-result-db-compatibility.test.js`，覆盖 function/switch NG outcome、timer TIMEOUT outcome、`abc_result.event_id` 审计别名和错误 `result_event_id`。
+- 更新旧示例 `examples/abc-sequence-flow.json`，新增 `examples/outcome-mode-flow.json`。
+- 新增当前消息合同 `docs/PHASE2_MESSAGE_CONTRACT.md`，说明线性场景与复杂逻辑统一通过 outcome/result 模式接入。
+- 更新 Phase 2 测试报告；全量 Node 自动化 142/142 通过。
 
 ---
 
@@ -597,18 +627,29 @@ npm.cmd test
 
 **依赖**：T04。
 
+**完成记录（2026-07-24）**
+
+- 新增 `python_runtime/pipeline_config.py`，作为 Python 侧唯一权威解析器。
+- 兼容 `GroupArrary` / `GroupArray`、`Sources`、`Infers`、`ModelArrary.Models` 及等价字段。
+- 规范化 `group_id`、`source_id`、`model_id` 为整数，同时保留字符串形式；路径同时保留原值和规范化路径。
+- 检测重复 group/model/source ID、缺失 source config、source 文件缺失、未知 model 引用、非法 YAML/root/source 结构和禁用 group。
+- Runner 在真实 SDK 模式下会先解析配置，解析失败不进入 READY，`command_result.error` 携带 `PIPELINE_CONFIG_*` 错误码。
+- Mock 模式使用同一 metadata 合同生成 mock group/source/model，避免开发测试被现场路径或本机 PyYAML 环境阻断。
+- 新增脱敏 fixtures：`tests/fixtures/pipeline_config/main-flow.yaml` 与 source YAML；未提交真实现场敏感配置。
+- 验证结果：`python -m unittest discover tests` 为 31/31 通过，`npm.cmd test` 为 142/142 通过。
+
 ---
 
 ### T10 runtime_ready 输出真实 group/source/model
 
 **目标**
 
-把 T09 的结果纳入正式 Runner 协议和 Node-RED 状态输出。
+把 T09 的结果纳入正式 Node-RED 状态输出和前端可读接口。Runner 侧 `runtime_ready` 已开始输出规范化 metadata；本任务聚焦缓存、状态接口和运维摘要。
 
 **实现要求**
 
-- `runtime_ready.payload.groups` 输出完整规范化 group 列表。
-- `sources_per_group` 和 `models_loaded` 从解析结果派生。
+- Node-RED 缓存最近一次 `runtime_ready.payload.groups` / `models` / `sources_per_group` / `models_loaded`。
+- `sources_per_group` 和 `models_loaded` 从解析结果派生并通过状态接口返回。
 - heartbeat 可以输出 group/source 运行摘要，但不得每次重复大体积静态配置。
 - aiban-runtime 缓存最近一次 ready 元数据，供状态接口和前端读取。
 
@@ -619,6 +660,16 @@ npm.cmd test
 - 更新 `docs/AIBAN_RUNTIME_PROTOCOL.md`。
 
 **依赖**：T09。
+
+**完成记录（2026-07-24）**
+
+- `aiban-runtime` 收到 `runtime_ready` 后缓存 `groups`、`sources_per_group`、`models_loaded`、`models` 和 `pipeline_config`。
+- `getRuntimeStatus()`、HTTP `GET /aiban-runtime/:id/status` 和控制操作返回 `ready_metadata` 与 `ready_metadata_summary`。
+- `ready_metadata` 附带 `session_id`、`event_id`、`event_seq`、`emitted_at`、`received_at`，便于排障和前端定位当前 session。
+- heartbeat 状态消息只附带 `aiban.ready_metadata_summary`，不重复发送完整静态 metadata。
+- 编辑器运行状态区域显示 groups/sources/models/disabled 摘要。
+- 新增 `aiban-runtime-node.test.js` 覆盖 metadata 缓存、只读拷贝、状态接口和 heartbeat summary；更新编辑器脚本测试。
+- 验证结果：`npm.cmd test` 为 143/143 通过；`python -m unittest discover tests` 为 31/31 通过。
 
 ---
 
@@ -650,6 +701,15 @@ npm.cmd test
 - 非法 mode、未知 group、空 scene_id 被拒绝。
 
 **依赖**：T05。
+
+**完成记录（2026-07-29）**
+
+- 新增 `lib/scene-registry-store.js`，默认使用 `<Node-RED userDir>/data/scene/scene-registry.sqlite`。
+- Scene 表以 `(group_id, scene_id)` 为唯一键，保存完整字段、创建/修改人员和时间。
+- Scene revision 和 exclusive selection revision 分离，旧 revision 返回 `CONFLICT`。
+- enable/disable、select/deselect 和 CRUD 变更均保存 operator、request_id、revision、before/after 审计记录。
+- 禁用当前 exclusive scene 时，同一事务内清除选择；enabled 或仍被选择的 scene 不允许删除。
+- 新增 6 项 Store 专项测试，覆盖重启持久化、重复键、未知 group、非法 mode/scene、冲突、选择和删除保护。
 
 ---
 
@@ -684,6 +744,16 @@ npm.cmd test
 
 **依赖**：T11。
 
+**完成记录（2026-07-29）**
+
+- 新增 `lib/scene-registry-api.js`，注册 Runtime metadata、Scene CRUD、enable/disable、exclusive select、current/history 和 tab 绑定接口。
+- 读、编辑、启停分别要求 `aiban-scene.read`、`aiban-scene.edit`、`aiban-scene.control`；Runtime 运维继续独立使用 `aiban-runtime.write`。
+- API 只调用 `getRuntimeStatus()` 读取 T10 权威 group metadata，未调用 Runtime start/stop/restart 或 Python SDK。
+- 新建 Scene 固定为 disabled，必须由 control 权限显式启用。
+- 稳定错误码覆盖 `NOT_FOUND`、`CONFLICT`、`INVALID_GROUP`、`INVALID_SCENE` 和 `FORBIDDEN`。
+- 新增 4 项 API 专项测试；T11/T12 合计 10 项专项通过，Node.js 全量 153/153 通过，指定 Python 环境 unittest 31/31 通过。
+- API 合同见 `docs/SCENE_REGISTRY_API.md`，验收证据见 `docs/TEST_REPORT_V2_SCENE_REGISTRY.md`。
+
 ---
 
 ### T13 scene-manager 接入正式 API
@@ -714,6 +784,14 @@ npm.cmd test
 - 未绑定 tab 时给出明确引导。
 
 **依赖**：T10、T12。
+
+**实际完成结果（2026-07-29）**
+
+- `frontend-demo/scene-manager/app.js` 默认从 Runtime metadata、Scene 列表和 current selection API 加载数据，所有写操作携带 revision/selection revision。
+- UI 分开展示 group enabled、scene enabled 和当前 exclusive scene；进入编排只接受 `node_red_tab_id`，不再用 workflow ID 猜测 Tab。
+- 冲突、权限、网络和 metadata 不可用均映射为稳定提示；冲突后自动刷新权威数据。
+- localStorage 仅在 URL 显式带 `?demo=1` 时使用，并显示“演示模式、不会写入 Registry”横幅。
+- 浏览器验收覆盖真实 API 模式、创建、刷新持久、启用、冲突、未绑定 Tab 指引、Demo 标识及 0 控制台错误。
 
 ---
 
@@ -755,6 +833,14 @@ npm.cmd test
 - 无路由帧不会静默丢失。
 
 **依赖**：T10、T12。
+
+**实际完成结果（2026-07-29）**
+
+- 新增 `aiban-scene-control`、`aiban-scene-router` 和 `lib/scene-routing.js`；Router 路由数固定，最后一个输出始终是 diagnostics。
+- Registry 是 scene 活动状态的唯一来源；Router 未复制业务周期状态，也未调用 Runtime/SDK 控制。
+- exclusive、parallel、group 禁用、未知 group、无 active scene、selected scene disabled 和 route 未绑定均有确定行为。
+- 每个活动 scene 获得独立消息副本，并补充 `scene_id`、`workflow_id`、`route_id`、`routed_at`。
+- 选择切换、scene/group 停用在下一帧向旧 route 发送 `aiban-interrupt`，再只向新活动 route 分发当前帧。
 
 ---
 
@@ -802,6 +888,14 @@ scene-entry
 
 **依赖**：T08、T14。
 
+**实际完成结果（2026-07-29）**
+
+- 新增 `aiban-scene-entry`，严格校验 group/scene/workflow 身份；第二输出提供身份错误诊断。
+- TopologyCompiler 已接受 `aiban-scene-entry` 作为简单顺序链入口，并通过入口定位配置的 Runtime。
+- `aiban-result` 消费 `aiban-interrupt`，仅重置同 workflow/session/group/source 的活动周期并产生 `INTERRUPTED`；审计新增 scene 标识。
+- `node-red/flows.json` 已拆为主 Tab 和 `group/1/scene/plug-sequence` Tab，主 Tab 不再包含业务 label。
+- 新增可导入的 `examples/group-scene-flow.json` Mock 示例；专项覆盖入口、编译、路由、独立副本、中断和流程结构。
+
 ---
 
 ## 11. M5：首个真实生产闭环
@@ -833,6 +927,13 @@ scene-entry
 
 **依赖**：T15。
 
+**2026-08-01 执行状态**
+
+- 修复 Mock 标签只产生首标签、人工 pause 被低水位自动恢复、验证器事件丢失/request_id 误配和 stderr 编码崩溃问题。
+- Mock 验证器 17/17、Node T16 专项 12/12；已覆盖双 source pause 隔离和 Router → Scene Entry → Sequence → Result 闭环。
+- 真实 YAML 已解析为 group 1 / source 1 / model 1，但 `libAiBanVideoPy3_9` 原生 DLL 初始化失败，未收到 `runtime_ready`。T16 保持 `DOING`，不得以 Mock 结果替代现场验收。
+- 证据见 `docs/TEST_REPORT_T16_REAL_SDK.md` 和 `docs/TEST_REPORT_T16_T20_2026-08-01.md`。
+
 ---
 
 ### T17 MySQL 幂等与首个副作用闭环
@@ -857,6 +958,12 @@ scene-entry
 - OK/NG/TIMEOUT 的入库映射有明确规则。
 
 **依赖**：T16。
+
+**2026-08-01 执行状态**
+
+- `sql/schema.sql` 已建立标准结果表和 `result_event_id` UNIQUE；结果状态原样保存 OK/NG/TIMEOUT/INTERRUPTED。
+- MySQL 队列已支持进程内去重、指数退避、队列溢出/最终失败 JSONL 和失败文件重放；API Output 使用 SQLite ledger 与 HTTP 幂等头。
+- 9/9 专项通过，含本地真实 HTTP 通知去重；由于未提供真实 MySQL 和现场 API，T17 保持 `DOING`。
 
 ---
 
@@ -895,9 +1002,14 @@ scene-entry
 
 **依赖**：T17。
 
+**2026-08-01 执行状态**
+
+- 已新增可配置 24 小时 harness 和稳定性指标判定；短时 Mock 双 source 冒烟收取 24 帧且所有门禁为 0。
+- 24 小时实跑、Node-RED Deploy、真实 MySQL 断开恢复、真实 SDK 恢复和现场 scene 快切尚未执行，T18 保持 `DOING`。
+
 ---
 
-## 12. M6：业务逻辑迁移
+## 12. M6：业务逻辑能力
 
 ### T19 补齐 Sequence 业务能力
 
@@ -922,9 +1034,15 @@ scene-entry
 
 **依赖**：T08、T15。
 
+**2026-08-01 开发验收**
+
+- `advanced-sequence-runtime` 已实现 complete/incomplete/skip/wrong-count/timeout、逐缺步 effects、duration/count/step_code、external、presence、loop/guard/transition。
+- 规则层独立于 `aiban-result`，状态按 workflow/session/group/source 隔离并持久化；Deploy 恢复产生明确 `INTERRUPTED`。
+- 10/10 专项和 `examples/t19-t20-logic-flow.json` 通过，T19 标记 `DONE`；现场标签优先级映射仍属于部署复核。
+
 ---
 
-### T20 迁移 Monitor 与 Timer Record
+### T20 补齐 Monitor 与 Timer Record
 
 **Monitor 范围**
 
@@ -948,9 +1066,15 @@ scene-entry
 
 **依赖**：T08、T15。
 
+**2026-08-01 开发验收**
+
+- Monitor 已实现 present/absent、帧数/时长阈值、cooldown、多 source 隔离、恢复/中断。
+- Timer Record 已实现 start/end、guard、absence 累积、timeout、工时结果、scene 中断和 Deploy 恢复策略。
+- 两类节点统一接收 scene-entry、输出标准 outcome/result；10/10 专项和示例通过，T20 标记 `DONE`。真实 scene 和业务表绑定属于现场部署复核。
+
 ---
 
-### T21 设计并迁移 Custom Flow 扩展能力
+### T21 设计 Custom Flow 扩展能力
 
 **目标**
 
@@ -972,11 +1096,21 @@ scene-entry
 
 **验收标准**
 
-- 至少迁移一个真实 1.0 Custom Flow。
-- 与 1.0 结果进行对比测试。
-- 明确无法迁移或决定淘汰的能力。
+- 至少提供一个真实 Custom Flow 等价示例。
+- 与 2.0 标准 outcome/result 进行对比测试。
+- 明确无法纳入 2.0 发布面的能力。
 
 **依赖**：T20。
+
+**2026-08-09 开发验收**
+
+- 新增 `CustomFlowRuntime`，使用受控 JSON guard/action DSL 表达变量、timer、状态转换和终态 outcome，不执行字符串表达式。
+- 新增 `aiban-custom-flow` Node-RED 节点，输出标准 outcome 和诊断事件。
+- 新增 `examples/t21-custom-flow.json`，展示 A 后受 guard 保护的 B、timer 超时和标准结果输出。
+- 新增 `docs/CUSTOM_FLOW_CONTRACT.md`，冻结 vars/timers/guard/actions、Deploy 恢复和 scene 中断合同。
+- 新增 `test/t21-custom-flow.test.js`，8 项覆盖变量/guard、timer、组合条件、安全拒绝、source/session 隔离、中断、恢复和 Custom Flow 等价表达。
+- 新增 `test/t23-v1-parity-isolation.test.js`，覆盖二阶子框、tracker、process monitoring、cycle record、count_exceeds 和 2.0-only 包隔离。
+- T21 标记 `DONE`；真实现场标签和业务表绑定仍属于部署复核，不阻塞受控扩展能力开发完成。
 
 ---
 
@@ -993,20 +1127,27 @@ scene-entry
 - Runtime、group、source、scene、cycle 和结果运行看板。
 - 配置备份、恢复和版本记录。
 - 日志归档、容量和告警策略。
-- 1.0/2.0 同输入双跑与结果对比。
+- 2.0 同输入回归和结果对比。
 - 进程、数据库、前端和 Node-RED 的启动顺序与服务化。
-- 回退到 1.0 的演练。
+- 现场回退演练由外部生产版本承担，不把旧组件重新放回 2.0 仓库。
 - 安装、升级和卸载说明。
 
 **发布门槛**
 
-- `docs/WORKFLOW_1_0_PARITY_MATRIX.md` 每一项都有最终结论。
+- `docs/WORKFLOW_V2_PARITY.md` 每一项都有自动化或现场验收结论。
 - 当前现场使用能力已迁移或有批准的替代方案。
 - 24 小时稳定性、异常恢复和回退演练通过。
 - 生产密码和配置不进入 Git。
 - 现场验收报告签字完成后才能发布 v2.0.0。
 
 **依赖**：T18，以及现场要求的 T19～T21 子任务。
+
+**2026-08-09 开发验收**
+
+- 新增 `tools/release_gate.js`，自动检查节点注册、核心文档、示例 flow、T21/T22 记录和 T16～T18 现场门禁。
+- 新增 `docs/RELEASE_GATE_V2.md`，明确发布候选流程、退出码、阻塞项和回退原则。
+- 新增 `test/t22-release-gate.test.js`，确认当前开发交付项可被检查，同时不会掩盖 T16～T18 和现场签字阻塞。
+- T22 标记 `DONE` 的含义是发布门禁工具、文档和自动化已完成；当前 `tools/release_gate.js` 仍返回 `BLOCKED`，正式 v2.0.0 必须等 T16～T18 与现场签字通过。
 
 ---
 
@@ -1043,7 +1184,7 @@ scene-entry
 
 ## 15. 当前首批任务包
 
-首批 Runtime 任务已经完成。当前按用户要求暂停，恢复后从 T05 开始，不提前开发 Scene Router：
+首批 Runtime、M2 结果分层、M3 Group/Scene Registry/前端、M4 Scene Router/首场景迁移、T19/T20 业务逻辑和 T21/T22 开发交付物已经完成。T16～T18 仍是正式发布前的现场验收门禁：
 
 ```text
 T00 基线与文档（DONE）
@@ -1053,7 +1194,43 @@ T00 基线与文档（DONE）
   → T04 生命周期验收（DONE）
 
 T00（DONE）
-  → T05 outcome/result 契约（READY，暂停前未领取）
+  → T05 outcome/result 契约（DONE）
+  → T06 SequenceRuntime 公共边界（DONE）
+  → T07 aiban-result 双模式结果出口（DONE）
+  → T08 结果兼容、复杂逻辑和迁移测试（DONE）
+  → T09 解析真实 Pipeline group 元数据（DONE）
+  → T10 runtime_ready 元数据状态输出（DONE）
+  → T11 Scene Registry 存储层（DONE）
+  → T12 Scene Registry API 和权限（DONE）
+  → T13 scene-manager 接入正式 API（DONE）
+  → T14 scene-control 与 scene-router（DONE）
+  → T15 scene-entry 与首场景迁移（DONE）
+  → T16 真实 SDK 首场景闭环验证（DOING — 原生 DLL 初始化失败，真实 READY 待修复）
+  → T17 MySQL 幂等与首个副作用闭环（DOING — 开发完成，真实库/API 待验收）
+  → T18 稳定性、故障恢复和阶段报告（DOING — harness 完成，24h/现场矩阵待执行）
+
+T08 + T15
+  → T19 Advanced Sequence（DONE — 10/10）
+  → T20 Monitor/Timer Record（DONE — 10/10）
+  → T21 Custom Flow（DONE — 8/8）
+  → T22 Release Gate（DONE — 门禁工具完成，当前因 T16～T18/签字阻塞发布）
 ```
 
-T04 和 T05 都完成后，再启动 T06 及后续任务。这样可以避免在运行时状态和结果协议尚未稳定时，把不确定性扩散到多 scene 架构。
+T16 自动化交付物：
+- `tools/verify_real_sdk.py` — Python 自动化验证脚本（Mock 17 项 Runtime/Frame 层检查）
+- `test/aiban-real-sdk.test.js` — Node.js spawn/场景闭环集成测试（12 项协议验证）
+- `docs/TEST_REPORT_T16_REAL_SDK.md` — 现场验证报告模板
+
+T16 必须使用真实 SDK 和真实 Pipeline 验证当前 Registry → Router → Scene Entry → Result 链路，不以 Mock 自动化替代现场证据。
+
+T21 自动化交付物：
+- `node-red-contrib-aiban-workflow/lib/custom-flow-runtime.js` — 受控 Custom Flow JSON DSL 运行时
+- `node-red-contrib-aiban-workflow/aiban-custom-flow.js` — Node-RED 节点
+- `node-red-contrib-aiban-workflow/examples/t21-custom-flow.json` — 可导入示例
+- `node-red-contrib-aiban-workflow/test/t21-custom-flow.test.js` — 8 项专项
+- `docs/CUSTOM_FLOW_CONTRACT.md` — DSL 和恢复/中断合同
+
+T22 自动化交付物：
+- `tools/release_gate.js` — 发布门禁检查工具
+- `node-red-contrib-aiban-workflow/test/t22-release-gate.test.js` — 门禁专项
+- `docs/RELEASE_GATE_V2.md` — 发布候选流程和阻塞项说明

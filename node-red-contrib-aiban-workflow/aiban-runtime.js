@@ -1,4 +1,4 @@
-/**
+﻿/**
  * aiban-runtime — Node-RED node that manages a Python/AiBan child process.
  *
  * Architecture:
@@ -30,6 +30,7 @@ const {
     RuntimeState,
     RuntimeTransitionError,
 } = require("./lib/runtime-controller");
+const { registerSceneRegistryApi } = require("./lib/scene-registry-api");
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -92,6 +93,55 @@ function sendAdminJson(res, statusCode, payload) {
     res.sendStatus(statusCode);
 }
 
+function cloneJson(value) {
+    if (value === undefined || value === null) {
+        return value;
+    }
+    return JSON.parse(JSON.stringify(value));
+}
+
+function summarizeReadyMetadata(metadata) {
+    if (!metadata) {
+        return null;
+    }
+    const groups = Array.isArray(metadata.groups) ? metadata.groups : [];
+    const sourcesPerGroup = metadata.sources_per_group || {};
+    const sourceCountFromGroups = groups.reduce((count, group) => {
+        const sources = Array.isArray(group && group.sources) ? group.sources : [];
+        return count + sources.length;
+    }, 0);
+    const sourceCountFromMap = Object.values(sourcesPerGroup).reduce((count, sourceIds) => (
+        count + (Array.isArray(sourceIds) ? sourceIds.length : 0)
+    ), 0);
+    const disabledGroups = metadata.pipeline_config
+        && Array.isArray(metadata.pipeline_config.disabled_groups)
+        ? metadata.pipeline_config.disabled_groups
+        : groups
+            .filter(group => group && group.enabled === false)
+            .map(group => group.group_id);
+    const enabledGroupCount = groups.filter(group => !group || group.enabled !== false).length;
+    const modelCount = Array.isArray(metadata.models) && metadata.models.length
+        ? metadata.models.length
+        : Array.isArray(metadata.models_loaded)
+            ? metadata.models_loaded.length
+            : 0;
+
+    return Object.freeze({
+        schema_version: metadata.pipeline_config
+            ? metadata.pipeline_config.schema_version || null
+            : null,
+        session_id: metadata.session_id || null,
+        event_seq: metadata.event_seq !== undefined ? metadata.event_seq : null,
+        group_count: groups.length,
+        enabled_group_count: enabledGroupCount,
+        disabled_group_count: disabledGroups.length,
+        disabled_groups: cloneJson(disabledGroups),
+        source_count: sourceCountFromGroups || sourceCountFromMap,
+        model_count: modelCount,
+        models_loaded: cloneJson(metadata.models_loaded || []),
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Node registration
 // ---------------------------------------------------------------------------
@@ -134,7 +184,9 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._pendingCommands = new Map();  // request_id → { resolve, reject, timer }
         this._shutdownInitiated = false;
         this._auditText = null;
-        this._legacyVideoLog = null;
+        this._runtimeVideoLog = null;
+        this._readyMetadata = null;
+        this._readyMetadataSummary = null;
         this._runtimeController = new RuntimeController({ autoStart: this.autoStart });
         this._runtimeController.on("stateChanged", (transition) => {
             this._applyRuntimeStatus(transition.current, transition.event);
@@ -153,7 +205,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         }
 
         this._openAuditLogs();
-        this._openLegacyVideoLog();
+        this._openRuntimeVideoLog();
 
         // --- Set initial status ---
         this._applyRuntimeStatus(this._runtimeController.getStatus(), "initialized");
@@ -239,7 +291,12 @@ module.exports = function registerAibanRuntimeNode(RED) {
     };
 
     AibanRuntimeNode.prototype.getRuntimeStatus = function () {
-        return this._runtimeController.serialize();
+        const status = this._runtimeController.serialize();
+        return Object.freeze({
+            ...status,
+            ready_metadata: cloneJson(this._readyMetadata),
+            ready_metadata_summary: cloneJson(this._readyMetadataSummary),
+        });
     };
 
     AibanRuntimeNode.prototype._buildOperationResult = function (
@@ -275,8 +332,28 @@ module.exports = function registerAibanRuntimeNode(RED) {
             restart_count: status.restart_count,
             last_error: status.last_error,
             state_changed_at: status.last_state_at,
+            ready_metadata: status.ready_metadata,
+            ready_metadata_summary: status.ready_metadata_summary,
             message: options.message || null,
         });
+    };
+
+    AibanRuntimeNode.prototype._cacheReadyMetadata = function (event, sessionId, eventSeq) {
+        const payload = event.payload || {};
+        const metadata = {
+            session_id: sessionId || null,
+            event_id: event.event_id || null,
+            event_seq: eventSeq !== undefined ? eventSeq : null,
+            emitted_at: event.emitted_at || null,
+            received_at: new Date().toISOString(),
+            groups: Array.isArray(payload.groups) ? payload.groups : [],
+            sources_per_group: payload.sources_per_group || {},
+            models_loaded: Array.isArray(payload.models_loaded) ? payload.models_loaded : [],
+            models: Array.isArray(payload.models) ? payload.models : [],
+            pipeline_config: payload.pipeline_config || null,
+        };
+        this._readyMetadata = cloneJson(metadata);
+        this._readyMetadataSummary = summarizeReadyMetadata(this._readyMetadata);
     };
 
     AibanRuntimeNode.prototype.controlRuntime = function (action, options = {}) {
@@ -347,7 +424,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
     AibanRuntimeNode.prototype._openAuditLogs = function () {
         try {
             const directory = path.resolve(
-                RED.settings.userDir, "..", "logs", "frame_bridge"
+                RED.settings.userDir, "..", "logs", "runtime"
             );
             fs.mkdirSync(directory, { recursive: true });
             const now = new Date();
@@ -375,27 +452,27 @@ module.exports = function registerAibanRuntimeNode(RED) {
         }
     };
 
-    AibanRuntimeNode.prototype._openLegacyVideoLog = function () {
+    AibanRuntimeNode.prototype._openRuntimeVideoLog = function () {
         try {
             const directory = path.resolve(
                 RED.settings.userDir, "..", "log", "abvideologs"
             );
             fs.mkdirSync(directory, { recursive: true });
             const textPath = path.join(directory, "vido_main.log");
-            this._legacyVideoLog = fs.createWriteStream(
+            this._runtimeVideoLog = fs.createWriteStream(
                 textPath, { flags: "a", encoding: "utf8" }
             );
-            this._writeLegacyVideoLog(
+            this._writeRuntimeVideoLog(
                 "runtime",
                 `==== aiban-runtime node started id=${this.id || ""} name=${this.name} ====`
             );
-            this.log(`Legacy video log: ${textPath}`);
+            this.log(`Runtime video log: ${textPath}`);
         } catch (err) {
-            this.warn(`Cannot open legacy video log: ${err.message}`);
+            this.warn(`Cannot open runtime video log: ${err.message}`);
         }
     };
 
-    AibanRuntimeNode.prototype._legacyTimestamp = function () {
+    AibanRuntimeNode.prototype._runtimeAuditTimestamp = function () {
         const now = new Date();
         const pad = (value, width = 2) => String(value).padStart(width, "0");
         return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} `
@@ -403,12 +480,12 @@ module.exports = function registerAibanRuntimeNode(RED) {
             + `${pad(now.getMilliseconds(), 3)}`;
     };
 
-    AibanRuntimeNode.prototype._writeLegacyVideoLog = function (scope, message) {
-        if (!this._legacyVideoLog) return;
+    AibanRuntimeNode.prototype._writeRuntimeVideoLog = function (scope, message) {
+        if (!this._runtimeVideoLog) return;
         try {
             const text = typeof message === "string" ? message : JSON.stringify(message);
-            this._legacyVideoLog.write(
-                `[${this._legacyTimestamp()}][${scope}] ${text}\n`
+            this._runtimeVideoLog.write(
+                `[${this._runtimeAuditTimestamp()}][${scope}] ${text}\n`
             );
         } catch (_) {
             // Logging must never interrupt inference.
@@ -445,7 +522,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         const timeText = new Date(nodeReceivedAtMs).toLocaleTimeString(
             "zh-CN", { hour12: false }
         );
-        this._writeLegacyVideoLog(
+        this._writeRuntimeVideoLog(
             "frame",
             `#${eventSeq} ${streamId || shortStream} labels=${labelText} `
             + `sdk_convert_ms=${sdkConvertMs.toFixed(2)} `
@@ -620,7 +697,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         const message = `Force killing Python process: operation_id=${operationId}`
             + ` pid=${child.pid || "unknown"} reason=${reason} signal=${signal}`;
         this.warn(message);
-        this._writeLegacyVideoLog("runtime:force-kill", message);
+        this._writeRuntimeVideoLog("runtime:force-kill", message);
         child.kill(signal);
         return true;
     };
@@ -648,6 +725,8 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
         this._sessionId = null;
         this._lastEventSeq = -1;
+        this._readyMetadata = null;
+        this._readyMetadataSummary = null;
         this._transitionRuntime("spawnRequested", transitionMetadata);
 
         const args = [
@@ -708,7 +787,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
         stderrRl.on("line", (line) => {
             this.log(`[python:stderr] ${line}`);
-            this._writeLegacyVideoLog("python:stderr", line);
+            this._writeRuntimeVideoLog("python:stderr", line);
         });
 
         // --- Process exit handler ---
@@ -719,7 +798,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
             }
             exitHandled = true;
             this.log(`Python process exited: code=${code} signal=${signal}`);
-            this._writeLegacyVideoLog(
+            this._writeRuntimeVideoLog(
                 "runtime",
                 `Python process exited: code=${code} signal=${signal}`
             );
@@ -769,7 +848,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         // --- Process error handler ---
         child.on("error", (err) => {
             this.error(`Process error: ${err.message}`);
-            this._writeLegacyVideoLog("runtime:error", err.message);
+            this._writeRuntimeVideoLog("runtime:error", err.message);
             this._transitionRuntime("processError", err);
             this.send([
                 null,
@@ -826,7 +905,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
             this._startupTimer = setTimeout(() => {
                 if (this._runtimeController.actualState === RuntimeState.STARTING) {
                     this.warn("Startup timeout — runtime_ready not received");
-                    this._writeLegacyVideoLog(
+                    this._writeRuntimeVideoLog(
                         "runtime:error",
                         `Startup timeout: runtime_ready not received within ${this.startupTimeoutMs}ms`
                     );
@@ -989,7 +1068,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         // observable as PARSE_ERROR.
         if (!trimmed.startsWith("{")) {
             this.log(`[python:native] ${trimmed.substring(0, 500)}`);
-            this._writeLegacyVideoLog("python:native", trimmed);
+            this._writeRuntimeVideoLog("python:native", trimmed);
             return;
         }
 
@@ -1004,7 +1083,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 ? trimmed.substring(0, 255) + "..."
                 : trimmed;
             this.warn(`stdout parse error: ${err.message} | raw: ${truncated}`);
-            this._writeLegacyVideoLog(
+            this._writeRuntimeVideoLog(
                 "stdout:parse_error",
                 `${err.message} | raw: ${truncated}`
             );
@@ -1079,7 +1158,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
                     eventSeq,
                 });
                 this.log(`Runner starting: ${JSON.stringify(payload)}`);
-                this._writeLegacyVideoLog("runtime_starting", payload);
+                this._writeRuntimeVideoLog("runtime_starting", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
@@ -1090,12 +1169,13 @@ module.exports = function registerAibanRuntimeNode(RED) {
                     clearTimeout(this._startupTimer);
                     this._startupTimer = null;
                 }
+                this._cacheReadyMetadata(event, sessionId, eventSeq);
                 this._transitionRuntime("runtimeReady", {
                     sessionId: sessionId || undefined,
                     pid: this._process ? this._process.pid : undefined,
                 });
                 this.log(`Runner ready: ${JSON.stringify(payload)}`);
-                this._writeLegacyVideoLog("runtime_ready", payload);
+                this._writeRuntimeVideoLog("runtime_ready", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 this._resetHeartbeat();
                 break;
@@ -1105,7 +1185,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
                     sessionId,
                     eventSeq,
                 });
-                this._writeLegacyVideoLog("runtime_stopping", payload);
+                this._writeRuntimeVideoLog("runtime_stopping", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
@@ -1115,13 +1195,13 @@ module.exports = function registerAibanRuntimeNode(RED) {
                     sessionId,
                     eventSeq,
                 });
-                this._writeLegacyVideoLog("runtime_stopped", payload);
+                this._writeRuntimeVideoLog("runtime_stopped", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "runtime_error":
                 this.warn(`Runtime error: ${payload.error_code} — ${payload.message}`);
-                this._writeLegacyVideoLog("runtime:error", payload);
+                this._writeRuntimeVideoLog("runtime:error", payload);
                 this._emitError(event, sessionId, eventSeq, payload.error_code);
                 break;
 
@@ -1134,24 +1214,24 @@ module.exports = function registerAibanRuntimeNode(RED) {
 
             case "sdk_event":
                 this.log(`[SDK:${payload.level}] ${payload.message}`);
-                this._writeLegacyVideoLog("sdk_event", payload);
+                this._writeRuntimeVideoLog("sdk_event", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "screenshot_result":
                 this.log(`Screenshot result: ${JSON.stringify(payload)}`);
-                this._writeLegacyVideoLog("screenshot_result", payload);
+                this._writeRuntimeVideoLog("screenshot_result", payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
 
             case "command_result":
-                this._writeLegacyVideoLog("command_result", payload);
+                this._writeRuntimeVideoLog("command_result", payload);
                 this._handleCommandResult(payload);
                 break;
 
             default:
                 this.log(`Unknown event type: ${eventType}`);
-                this._writeLegacyVideoLog(eventType, payload);
+                this._writeRuntimeVideoLog(eventType, payload);
                 this._emitStatus(event, sessionId, eventSeq);
                 break;
         }
@@ -1184,18 +1264,22 @@ module.exports = function registerAibanRuntimeNode(RED) {
     };
 
     AibanRuntimeNode.prototype._emitStatus = function (event, sessionId, eventSeq) {
+        const aiban = {
+            runtime_id: this.id,
+            session_id: sessionId,
+            event_id: event.event_id,
+            event_seq: eventSeq,
+            status_type: event.type,
+        };
+        if (event.type === "heartbeat" && this._readyMetadataSummary) {
+            aiban.ready_metadata_summary = cloneJson(this._readyMetadataSummary);
+        }
         this.send([
             null,  // port 1
             {
                 topic: "aiban/status",
                 payload: event.payload,
-                aiban: {
-                    runtime_id: this.id,
-                    session_id: sessionId,
-                    event_id: event.event_id,
-                    event_seq: eventSeq,
-                    status_type: event.type,
-                },
+                aiban,
             },
             null,  // port 3
         ]);
@@ -1253,7 +1337,7 @@ module.exports = function registerAibanRuntimeNode(RED) {
         this._heartbeatTimer = setTimeout(() => {
             if (this._runtimeController.actualState === RuntimeState.READY) {
                 this.warn("Heartbeat timeout — no heartbeat received");
-                this._writeLegacyVideoLog(
+                this._writeRuntimeVideoLog(
                     "runtime:error",
                     `Heartbeat timeout: no heartbeat received within ${this.heartbeatTimeoutMs}ms`
                 );
@@ -1289,13 +1373,13 @@ module.exports = function registerAibanRuntimeNode(RED) {
                 this._auditText.end();
                 this._auditText = null;
             }
-            if (this._legacyVideoLog) {
-                this._writeLegacyVideoLog(
+            if (this._runtimeVideoLog) {
+                this._writeRuntimeVideoLog(
                     "runtime",
                     `==== aiban-runtime node closed id=${this.id || ""} ====`
                 );
-                this._legacyVideoLog.end();
-                this._legacyVideoLog = null;
+                this._runtimeVideoLog.end();
+                this._runtimeVideoLog = null;
             }
         };
 
@@ -1703,6 +1787,9 @@ module.exports = function registerAibanRuntimeNode(RED) {
         }
     );
 
+    registerSceneRegistryApi(RED, { sendJson: sendAdminJson });
+
     // Register the node type
     RED.nodes.registerType("aiban-runtime", AibanRuntimeNode);
 };
+

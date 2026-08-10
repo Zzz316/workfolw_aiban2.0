@@ -1,16 +1,22 @@
 [
     {
-        "id": "28c978f12126f179",
+        "id": "tab-aiban-main",
         "type": "tab",
-        "label": "流程 1",
+        "label": "AiBan 主流程",
         "disabled": false,
-        "info": "",
-        "env": []
+        "info": "只负责 Runtime 帧输入、场景路由和诊断，不包含业务标签。"
+    },
+    {
+        "id": "tab-group1-plug-sequence",
+        "type": "tab",
+        "label": "group/1/scene/plug-sequence",
+        "disabled": false,
+        "info": "场景子流程：entry → 1 → 2 → 3 → end → result → result-db"
     },
     {
         "id": "7f59e2d67dde1743",
         "type": "aiban-runtime",
-        "z": "28c978f12126f179",
+        "z": "tab-aiban-main",
         "name": "aiban-runtime",
         "pythonPath": "python",
         "runnerPath": "",
@@ -26,116 +32,197 @@
         "maxRestartCount": 3,
         "restartBackoffMs": 5000,
         "autoStart": true,
-        "x": 120,
-        "y": 80,
+        "x": 150,
+        "y": 100,
         "wires": [
             [
-                "6cf6da4bb95625e8"
+                "scene-router-main"
             ],
             [
-                "f89df019c25d07ba"
+                "debug-runtime-status"
             ],
             [
-                "e0c74e10b8b073d8"
+                "debug-runtime-error"
             ]
         ]
     },
     {
-        "id": "e0c74e10b8b073d8",
-        "type": "debug",
-        "z": "28c978f12126f179",
-        "name": "debug 3",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 320,
-        "y": 160,
-        "wires": []
+        "id": "scene-router-main",
+        "type": "aiban-scene-router",
+        "z": "tab-aiban-main",
+        "name": "Scene Registry 路由",
+        "runtimeNodeId": "7f59e2d67dde1743",
+        "routes": "[{\"route_id\":\"route-group1-plug-sequence\",\"group_id\":1,\"scene_id\":\"plug-sequence\"}]",
+        "outputs": 2,
+        "x": 400,
+        "y": 100,
+        "wires": [
+            [
+                "link-out-plug-sequence"
+            ],
+            [
+                "debug-scene-diagnostics"
+            ]
+        ]
     },
     {
-        "id": "f89df019c25d07ba",
-        "type": "debug",
-        "z": "28c978f12126f179",
-        "name": "debug 2",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 320,
+        "id": "link-out-plug-sequence",
+        "type": "link out",
+        "z": "tab-aiban-main",
+        "name": "→ plug-sequence",
+        "mode": "link",
+        "links": [
+            "link-in-plug-sequence"
+        ],
+        "x": 625,
         "y": 100,
         "wires": []
     },
     {
-        "id": "6cf6da4bb95625e8",
+        "id": "debug-runtime-status",
+        "type": "debug",
+        "z": "tab-aiban-main",
+        "name": "Runtime 状态",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 410,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "debug-runtime-error",
+        "type": "debug",
+        "z": "tab-aiban-main",
+        "name": "Runtime 错误",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 410,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "debug-scene-diagnostics",
+        "type": "debug",
+        "z": "tab-aiban-main",
+        "name": "场景路由诊断",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 670,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "link-in-plug-sequence",
+        "type": "link in",
+        "z": "tab-group1-plug-sequence",
+        "name": "来自主流程路由",
+        "links": [
+            "link-out-plug-sequence"
+        ],
+        "x": 105,
+        "y": 100,
+        "wires": [
+            [
+                "scene-entry-plug-sequence"
+            ]
+        ]
+    },
+    {
+        "id": "scene-entry-plug-sequence",
+        "type": "aiban-scene-entry",
+        "z": "tab-group1-plug-sequence",
+        "name": "plug-sequence entry",
+        "runtimeNodeId": "7f59e2d67dde1743",
+        "group_id": 1,
+        "scene_id": "plug-sequence",
+        "workflow_id": "group/1/scene/plug-sequence",
+        "x": 280,
+        "y": 100,
+        "wires": [
+            [
+                "label-plug-1"
+            ],
+            [
+                "debug-entry-diagnostics"
+            ]
+        ]
+    },
+    {
+        "id": "label-plug-1",
         "type": "aiban-label",
-        "z": "28c978f12126f179",
+        "z": "tab-group1-plug-sequence",
         "name": "插接1",
-        "label_id": "插接1",
+        "label_id": "1",
         "model_id": "0",
         "label": "插接1",
         "confidence": "0.80",
         "frame_count": "5",
         "is_end": false,
-        "alarm_name": "漏插接1",
-        "x": 350,
-        "y": 40,
+        "alarm_name": "漏插接",
+        "x": 500,
+        "y": 100,
         "wires": [
             [
-                "63a09885a2d35ed2"
+                "label-plug-2"
             ]
         ]
     },
     {
-        "id": "63a09885a2d35ed2",
+        "id": "label-plug-2",
         "type": "aiban-label",
-        "z": "28c978f12126f179",
+        "z": "tab-group1-plug-sequence",
         "name": "插接2",
-        "label_id": "插接2",
+        "label_id": "2",
         "model_id": "0",
         "label": "插接2",
         "confidence": "0.80",
         "frame_count": "5",
         "is_end": false,
-        "alarm_name": "漏插接2",
-        "x": 570,
-        "y": 40,
+        "alarm_name": "漏插接",
+        "x": 680,
+        "y": 100,
         "wires": [
             [
-                "b8ab3fd7ea5d663b"
+                "label-plug-3"
             ]
         ]
     },
     {
-        "id": "b8ab3fd7ea5d663b",
+        "id": "label-plug-3",
         "type": "aiban-label",
-        "z": "28c978f12126f179",
+        "z": "tab-group1-plug-sequence",
         "name": "插接3",
-        "label_id": "插接3",
+        "label_id": "3",
         "model_id": "0",
         "label": "插接3",
         "confidence": "0.80",
         "frame_count": "5",
         "is_end": false,
-        "alarm_name": "漏插接3",
-        "x": 790,
-        "y": 40,
+        "alarm_name": "漏插接",
+        "x": 860,
+        "y": 100,
         "wires": [
             [
-                "b53e6c12542ad53f"
+                "label-plug-end"
             ]
         ]
     },
     {
-        "id": "b53e6c12542ad53f",
+        "id": "label-plug-end",
         "type": "aiban-label",
-        "z": "28c978f12126f179",
+        "z": "tab-group1-plug-sequence",
         "name": "end",
         "label_id": "end",
         "model_id": "0",
@@ -144,37 +231,39 @@
         "frame_count": "5",
         "is_end": true,
         "alarm_name": "",
-        "x": 1010,
-        "y": 40,
+        "x": 1040,
+        "y": 100,
         "wires": [
             [
-                "8e2a25d4a2a5f356"
+                "result-plug-sequence"
             ]
         ]
     },
     {
-        "id": "8e2a25d4a2a5f356",
+        "id": "result-plug-sequence",
         "type": "aiban-result",
-        "z": "28c978f12126f179",
-        "name": "结果判定",
-        "workflow_id": "abc-sequence-demo",
+        "z": "tab-group1-plug-sequence",
+        "name": "插接顺序结果",
+        "mode": "simple-sequence",
+        "workflow_id": "group/1/scene/plug-sequence",
+        "scene_id": "plug-sequence",
         "cycle_timeout_ms": 30000,
         "allow_same_frame_restart": true,
         "stateDbPath": "data/workflow/flow-state.db",
         "auditDir": "logs/workflow",
-        "x": 1200,
-        "y": 40,
+        "x": 1220,
+        "y": 100,
         "wires": [
             [
-                "1939a843215054f0"
+                "result-db-plug-sequence"
             ]
         ]
     },
     {
-        "id": "1939a843215054f0",
+        "id": "result-db-plug-sequence",
         "type": "aiban-result-db",
-        "z": "28c978f12126f179",
-        "name": "结果入库",
+        "z": "tab-group1-plug-sequence",
+        "name": "插接结果入库",
         "tableName": "icamera_data.icam_alarm_data",
         "regionName": "测试区域",
         "okAlarmContent": "流程OK",
@@ -185,10 +274,25 @@
         "maxRetries": 3,
         "retryDelayMs": 500,
         "queueSize": 1000,
-        "x": 1360,
-        "y": 40,
+        "x": 1410,
+        "y": 100,
         "wires": [
             []
         ]
+    },
+    {
+        "id": "debug-entry-diagnostics",
+        "type": "debug",
+        "z": "tab-group1-plug-sequence",
+        "name": "入口身份诊断",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 510,
+        "y": 160,
+        "wires": []
     }
 ]

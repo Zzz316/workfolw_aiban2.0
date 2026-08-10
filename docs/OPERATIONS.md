@@ -1,7 +1,7 @@
 # AiBan Workflow 2.0 Runtime 运维手册
 
-> 版本：v2.0.0<br>
-> 日期：2026-07-22<br>
+> 版本：v2.0.1<br>
+> 日期：2026-08-09<br>
 > 适用范围：Node-RED `aiban-runtime` 托管 Python Runner 与 AiBan Pipeline
 
 ## 1. 当前运行结构
@@ -15,7 +15,7 @@ Node-RED
 
 Node-RED 是 Runtime 生命周期的唯一生产控制面。Python Runner 负责 SDK 配置校验、Pipeline 启停、帧/心跳/错误/截图协议，不执行通用业务判定。
 
-旧的 `main.py → SQLite Outbox → ZeroMQ → frame-input` 链路已冻结，不是 2.0 生产主链路。
+2.0 生产主链路由 Node-RED `aiban-runtime` 直接托管 Python Runner 和 AiBan Pipeline。
 
 ## 2. 关键配置
 
@@ -125,7 +125,7 @@ operation_id=<id> pid=<pid> reason=<reason> signal=SIGKILL
 | 路径/来源 | 内容 |
 |---|---|
 | Node-RED 节点日志 | spawn、stderr、退出、重启、强杀 |
-| `logs/frame_bridge/runtime-*.log` | Runtime 帧时序/审计 |
+| `logs/runtime/runtime-*.log` | Runtime 帧时序/审计 |
 | `log/abvideologs/` | AiBan SDK 日志 |
 | `node-red/logs/workflow/*.jsonl` | 工作流审计 |
 | GET status | 当前状态、PID、session、最后错误 |
@@ -156,7 +156,71 @@ cd D:\workfolw_aiban_2.0\node-red-contrib-aiban-workflow
 npm.cmd test
 
 cd ..
+D:\my_env\python.exe -m unittest discover tests
 powershell -ExecutionPolicy Bypass -File tools\check-orphan-python.ps1 -Verbose
+node tools\release_gate.js
 ```
 
-Mock/自动化验收不能替代真实 SDK 场景闭环、真实 MySQL、副作用和 24 小时长稳测试；这些分别由 T16～T18 和发布任务验收。
+`tools\release_gate.js` 在 T16～T18 现场验收或现场签字缺失时必须返回 `BLOCKED`。Mock/自动化验收不能替代真实 SDK 场景闭环、真实 MySQL、副作用和 24 小时长稳测试；这些分别由 T16～T18 和发布任务验收。
+
+## 11. T16～T18 现场收口
+
+### 11.1 T16 真实 SDK 当前阻塞
+
+2026-08-01 已使用 `D:\my_env\python.exe`、`D:\product\AiBanWorkSpace` 和真实 `main-flow.yaml` 执行验证。YAML 可解析为 group 1 / source 1 / model 1，Runner 发出 `runtime_starting`，但 `libAiBanVideoPy3_9` 原生 DLL 初始化失败，未到 `runtime_ready`。
+
+处理顺序：
+
+1. 核对 SDK 对应的 Python 3.9 位数、VC++ Runtime、原生 DLL 及其依赖 DLL 是否一致。
+2. 在 SDK 工作目录直接执行最小 import，确认不再出现 `DLL initialization routine failed`。
+3. 重新执行 `tools/verify_real_sdk.py`，必须取得真实 READY、帧、截图和停止证据。
+4. 再在 Node-RED 完成 Registry → Router → Scene Entry → Result 的真实 OK/NG/TIMEOUT 与 scene/source 控制验收。
+
+不得用 Mock 17/17 或 Node 专项 12/12 替代上述真实证据。当前报告见 `docs/TEST_REPORT_T16_REAL_SDK.md`。
+
+### 11.2 T17 标准结果库和 API Output
+
+首次部署 schema：
+
+```powershell
+Get-Content node-red-contrib-aiban-workflow\sql\schema.sql -Raw |
+  mysql.exe -h 127.0.0.1 -u root -p
+```
+
+`aiban-result-db` 默认写入 `icamera_data.workflow_result_event`。验收时至少查询：
+
+```sql
+SELECT result_event_id, workflow_id, scene_id, cycle_id,
+       result_status, image_path, cycle_finished_at
+FROM icamera_data.workflow_result_event
+ORDER BY id DESC
+LIMIT 50;
+```
+
+必须重复投递同一 `result_event_id`，确认数据库只有一行。断库期间最终失败记录位于 Node-RED userDir 的 `data/workflow/db-failed.jsonl`；恢复后使用 `MysqlWriteQueue.replayFailureFile()` 的受控维护脚本重放，并保存归档文件名和队列统计。
+
+`aiban-api-output` 只消费标准 terminal result，请求携带 `Idempotency-Key` 和 `x-aiban-result-event-id`。本地副作用 ledger 位于 Node-RED userDir 的 `data/workflow/side-effects.db`。现场验收必须重复投递同一结果并确认对端只产生一次业务通知。
+
+### 11.3 T18 稳定性运行
+
+短时冒烟：
+
+```powershell
+node tools\run_stability_test.js --mock `
+  --duration-seconds 120 `
+  --output tmp\t18-smoke.json
+```
+
+正式 24 小时：
+
+```powershell
+node tools\run_stability_test.js `
+  --duration-hours 24 `
+  --python D:\my_env\python.exe `
+  --sdk-home D:\product\AiBanWorkSpace `
+  --pipeline-config D:\product\AiBanWorkSpace\abvideo\main-flow.yaml `
+  --working-directory D:\product\AiBanWorkSpace `
+  --output outputs\t18-24h.json
+```
+
+Harness 报告只覆盖可由 Runner 自动观测的指标。Node-RED Deploy、Python 崩溃/恢复、SDK 启动失败/恢复、真实 MySQL 断开/恢复、scene 快切和 screenshot 超时还必须按现场矩阵逐项执行，并附 operation ID、result event ID、时间段和日志路径。

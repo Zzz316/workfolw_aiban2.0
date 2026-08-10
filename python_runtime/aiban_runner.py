@@ -29,6 +29,11 @@ from python_runtime.protocol import (
     encode_event,
     now_iso,
 )
+from python_runtime.pipeline_config import (
+    PipelineConfigError,
+    build_mock_pipeline_metadata,
+    parse_pipeline_config,
+)
 from python_runtime.lifecycle import (
     BoundedOutputQueue,
     LifecycleManager,
@@ -169,6 +174,9 @@ class AibanRunner:
 
         # Stats tracking per source for watermark-based pause/resume
         self._source_frame_counts: Dict[str, int] = {}
+        self._manual_paused_sources = set()
+        self._watermark_paused_sources = set()
+        self._pipeline_metadata: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Event tracking
@@ -298,6 +306,7 @@ class AibanRunner:
             self._output_queue.depth, self._output_queue.capacity, busiest,
         )
         self._lifecycle.add_paused_source(busiest)
+        self._watermark_paused_sources.add(busiest)
         parts = busiest.split("/")
         if len(parts) == 2:
             try:
@@ -342,8 +351,13 @@ class AibanRunner:
             self._output_queue.put(event)
 
         elif self._output_queue.is_below_low_watermark():
-            # Resume all paused sources
-            for stream_id in list(self._lifecycle.paused_sources):
+            # Resume only sources paused by backpressure.  Operator pauses
+            # must survive a low-watermark check and require an explicit
+            # resume_source command.
+            for stream_id in list(self._watermark_paused_sources):
+                self._watermark_paused_sources.discard(stream_id)
+                if stream_id in self._manual_paused_sources:
+                    continue
                 logger.info("Queue at low watermark, resuming %s", stream_id)
                 parts = stream_id.split("/")
                 if len(parts) == 2:
@@ -417,6 +431,43 @@ class AibanRunner:
         self._shutdown_reason = reason
         self._shutdown_event.set()
 
+    def _load_pipeline_metadata(self) -> Dict[str, Any]:
+        """Load authoritative group/source/model metadata for runtime_ready."""
+        if self._use_mock:
+            return build_mock_pipeline_metadata(
+                num_groups=self._mock_config.get("num_groups", 1),
+                num_sources=self._mock_config.get("num_sources", 1),
+                model_ids=self._mock_config.get("model_ids", [1]),
+            )
+        if self._pipeline_config:
+            return parse_pipeline_config(
+                self._pipeline_config,
+                base_dir=self._working_directory or os.getcwd(),
+            )
+        raise PipelineConfigError(
+            "PIPELINE_CONFIG_REQUIRED",
+            "pipeline_config is required for real SDK startup",
+        )
+
+    def _runtime_ready_payload(self) -> Dict[str, Any]:
+        metadata = self._pipeline_metadata or build_mock_pipeline_metadata(
+            num_groups=self._mock_config.get("num_groups", 1),
+            num_sources=self._mock_config.get("num_sources", 1),
+            model_ids=self._mock_config.get("model_ids", [1]),
+        )
+        return {
+            "groups": metadata.get("groups", []),
+            "sources_per_group": metadata.get("sources_per_group", {}),
+            "models_loaded": metadata.get("models_loaded", []),
+            "models": metadata.get("models", []),
+            "pipeline_config": {
+                "schema_version": metadata.get("schema_version", "pipeline-config/v1"),
+                "config_path": metadata.get("config_path", self._pipeline_config),
+                "config_path_normalized": metadata.get("config_path_normalized", ""),
+                "disabled_groups": metadata.get("disabled_groups", []),
+            },
+        }
+
     def _cmd_start(self, command: str, request_id: str, params: dict) -> dict:
         """Handle 'start' command — initialize SDK and build pipeline."""
         if self._lifecycle.state == LifecycleState.READY:
@@ -437,6 +488,15 @@ class AibanRunner:
             },
         )
         self._output_queue.put(event)
+
+        # Parse Pipeline metadata before SDK startup so invalid YAML never
+        # produces a false READY state.
+        try:
+            self._pipeline_metadata = self._load_pipeline_metadata()
+        except PipelineConfigError as exc:
+            self._pipeline_metadata = None
+            self._lifecycle.transition_to(LifecycleState.ERROR)
+            raise RuntimeError(str(exc)) from exc
 
         # Check config
         try:
@@ -461,11 +521,7 @@ class AibanRunner:
             event_type="runtime_ready",
             session_id=self._lifecycle.session_id,
             event_seq=self._lifecycle.next_seq(),
-            payload={
-                "groups": [1],  # FIXME: extract from YAML
-                "sources_per_group": {"1": list(range(1, self._mock_config.get("num_sources", 1) + 1))},
-                "models_loaded": [str(m) for m in self._mock_config.get("model_ids", [1])],
-            },
+            payload=self._runtime_ready_payload(),
         )
         self._output_queue.put(event)
 
@@ -497,6 +553,8 @@ class AibanRunner:
             session_id = self._lifecycle.reset_for_restart(reuse_session=False)
             self._command_loop.set_session_id(session_id)
             self._source_frame_counts.clear()
+            self._manual_paused_sources.clear()
+            self._watermark_paused_sources.clear()
             start_result = self._cmd_start("start", request_id + "-start", {})
 
         return {
@@ -525,6 +583,7 @@ class AibanRunner:
         source_id = params["source_id"]
         stream_id = f"group-{group_id}/source-{source_id}"
         self._sdk_adapter.source_control(group_id, source_id, False)
+        self._manual_paused_sources.add(stream_id)
         self._lifecycle.add_paused_source(stream_id)
         return {"stream_id": stream_id, "paused": True}
 
@@ -533,8 +592,10 @@ class AibanRunner:
         group_id = params["group_id"]
         source_id = params["source_id"]
         stream_id = f"group-{group_id}/source-{source_id}"
-        self._sdk_adapter.source_control(group_id, source_id, True)
-        self._lifecycle.remove_paused_source(stream_id)
+        self._manual_paused_sources.discard(stream_id)
+        if stream_id not in self._watermark_paused_sources:
+            self._sdk_adapter.source_control(group_id, source_id, True)
+            self._lifecycle.remove_paused_source(stream_id)
         return {"stream_id": stream_id, "paused": False}
 
     def _cmd_screenshot(self, command: str, request_id: str, params: dict) -> dict:

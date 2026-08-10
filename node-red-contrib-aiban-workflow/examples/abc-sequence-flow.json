@@ -4,7 +4,7 @@
         "type": "tab",
         "label": "Phase 2: A-B-C 拓扑驱动顺序检测",
         "disabled": false,
-        "info": "拓扑驱动最小闭环: aiban-runtime → aiban-label (A) → aiban-label (B) → aiban-label (C) → aiban-result → aiban-result-db\n\n验证要点:\n- A/B/C 是三个独立可拖放的 aiban-label 组件\n- 顺序由画布连线拓扑表达，不在任何组件中配置 steps 数组\n- 改变连线 (如 A→C→B) 即可改变期望顺序\n- aiban-result 自动从连线发现拓扑并管理状态机\n- 入口节点为 aiban-runtime (非 aiban-frame-input/ZMQ)"
+        "info": "拓扑驱动最小闭环: aiban-runtime → aiban-label (A) → aiban-label (B) → aiban-label (C) → aiban-result → aiban-result-db\n\n验证要点:\n- A/B/C 是三个独立可拖放的 aiban-label 组件\n- 顺序由画布连线拓扑表达，不在任何组件中配置 steps 数组\n- 改变连线 (如 A→C→B) 即可改变期望顺序\n- aiban-result 自动从连线发现拓扑并管理状态机\n- 入口节点为 aiban-runtime"
     },
     {
         "id": "runtime-abc",
@@ -80,7 +80,9 @@
         "type": "aiban-result",
         "z": "phase2-abc-tab",
         "name": "结果判定",
+        "mode": "simple-sequence",
         "workflow_id": "abc-sequence-demo",
+        "scene_id": "default",
         "cycle_timeout_ms": "30000",
         "allow_same_frame_restart": false,
         "stateDbPath": "data/workflow/flow-state.db",

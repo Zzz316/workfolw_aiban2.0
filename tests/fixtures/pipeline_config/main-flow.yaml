@@ -1,0 +1,27 @@
+AibanVideoMain:
+  version: "3.0"
+  windowname: "sanitized-test"
+GroupArrary:
+  - groupid: "1"
+    groupname: "entrance"
+    groupenable: "True"
+    Sources:
+      - config: "camera-101.yaml"
+      - config: ".\\camera-102.yaml"
+    Infers:
+      - modeid: "1"
+      - model_id: 2
+  - group_id: 2
+    groupname: "disabled-yard"
+    groupenable: false
+    Sources:
+      - config: "camera-201.yaml"
+    Infers:
+      - modeid: 1
+ModelArrary:
+  platform: 0
+  Models:
+    - modelid: "1"
+      modelpath: ".\\models\\ppe.onnx"
+    - model_id: 2
+      model_path: 'D:\AiBan\models\helmet.onnx'

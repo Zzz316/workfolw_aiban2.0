@@ -1,0 +1,60 @@
+[
+  {
+    "id": "tab-t21-custom-flow",
+    "type": "tab",
+    "label": "group/1/scene/custom-flow"
+  },
+  {
+    "id": "t21-entry",
+    "type": "aiban-scene-entry",
+    "z": "tab-t21-custom-flow",
+    "name": "custom flow entry",
+    "group_id": "1",
+    "scene_id": "custom-flow",
+    "workflow_id": "group/1/scene/custom-flow",
+    "x": 160,
+    "y": 120,
+    "wires": [["t21-custom-flow"], []]
+  },
+  {
+    "id": "t21-custom-flow",
+    "type": "aiban-custom-flow",
+    "z": "tab-t21-custom-flow",
+    "name": "A then guarded B",
+    "workflowId": "group/1/scene/custom-flow",
+    "sceneId": "custom-flow",
+    "initialState": "start",
+    "cycleTimeoutMs": 30000,
+    "resumeAfterRestart": false,
+    "varsJson": "{\n  \"hit_count\": { \"type\": \"counter\", \"initial\": 0 },\n  \"approved\": { \"type\": \"bool\", \"initial\": false }\n}",
+    "timersJson": "{\n  \"process_timer\": { \"timeout_ms\": 5000 }\n}",
+    "statesJson": "[\n  {\n    \"id\": \"start\",\n    \"scan\": [\n      { \"id\": \"hit-a\", \"label_id\": \"A\", \"actions\": [ { \"inc\": \"hit_count\" }, { \"start_timer\": \"process_timer\" } ] },\n      { \"id\": \"approve\", \"label_id\": \"B\", \"guard\": { \"var\": \"hit_count\", \"op\": \">=\", \"value\": 1 }, \"actions\": [ { \"set\": { \"var\": \"approved\", \"value\": true } } ] }\n    ],\n    \"transitions\": [\n      { \"id\": \"approved\", \"when\": { \"var\": \"approved\", \"op\": \"==\", \"value\": true }, \"goto\": \"done\", \"actions\": [ { \"outcome\": { \"status\": \"OK\", \"code\": \"CUSTOM_FLOW_COMPLETED\", \"effects\": [ { \"type\": \"save_db\", \"record_type\": \"custom_flow\" } ] } } ] }\n    ],\n    \"on_timer_expire\": [\n      { \"timer\": \"process_timer\", \"actions\": [ { \"outcome\": { \"status\": \"TIMEOUT\", \"code\": \"CUSTOM_FLOW_TIMER_TIMEOUT\", \"reason\": \"B did not arrive in time\" } } ] }\n    ]\n  },\n  { \"id\": \"done\", \"scan\": [], \"transitions\": [] }\n]",
+    "x": 390,
+    "y": 120,
+    "wires": [["t21-result"], ["t21-debug"]]
+  },
+  {
+    "id": "t21-result",
+    "type": "aiban-result",
+    "z": "tab-t21-custom-flow",
+    "name": "custom flow result",
+    "mode": "outcome",
+    "workflow_id": "group/1/scene/custom-flow",
+    "scene_id": "custom-flow",
+    "x": 650,
+    "y": 100,
+    "wires": [["t21-debug"]]
+  },
+  {
+    "id": "t21-debug",
+    "type": "debug",
+    "z": "tab-t21-custom-flow",
+    "name": "custom output",
+    "active": true,
+    "tosidebar": true,
+    "complete": "true",
+    "x": 850,
+    "y": 140,
+    "wires": []
+  }
+]

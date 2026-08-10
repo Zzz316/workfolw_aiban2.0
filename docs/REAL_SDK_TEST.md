@@ -4,7 +4,7 @@
 > 更新日期：2026-07-22<br>
 > 适用架构：Node-RED `aiban-runtime → Python Runner → AiBan SDK`
 
-本文只描述当前 2.0 主链路。旧 `main.py → ZeroMQ → aiban-frame-input` 步骤已经归档，不得用于当前阶段验收。
+本文只描述当前 2.0 主链路，验收入口统一为 Node-RED `aiban-runtime` 托管的 Python Runner。
 
 ## 1. 验证目标
 
@@ -39,7 +39,7 @@ python --version
 node --version
 ```
 
-生产测试前确认同一 Pipeline 没有被其他 `main.py`、Python Runner 或 Node-RED 实例占用。
+生产测试前确认同一 Pipeline 没有被其他 Python Runner 或 Node-RED 实例占用。
 
 ## 3. Node-RED 配置
 
@@ -59,7 +59,7 @@ node --version
 
 ## 4. 启动方式
 
-只启动 Node-RED，不单独启动 `main.py`：
+只启动 Node-RED，由 `aiban-runtime` 托管 Python Runner：
 
 ```powershell
 cd node-red
@@ -162,12 +162,12 @@ T04 已完成自动化和 Windows 真 Python 子进程验收。T16 真实 SDK �
 当前运行审计默认位于：
 
 ```text
-logs/frame_bridge/runtime-*.log
+logs/runtime/runtime-*.log
 node-red/logs/workflow/workflow-*.log
 node-red/logs/workflow/workflow-*.jsonl
 ```
 
-目录名 `frame_bridge` 是历史命名，当前 `runtime-*.log` 记录的是进程管道链路，不代表重新启用 ZMQ。
+`runtime-*.log` 记录的是 2.0 进程管道链路的运行审计。
 
 ## 7. 业务结果验证
 
@@ -223,7 +223,7 @@ Mock screenshot 不能替代真实文件存在性检查。
 现有本地证据：
 
 - `node-red/flows.json` 的 `aiban-runtime.useMock=false`。
-- `logs/frame_bridge/runtime-20260722-151307-7f59e2d67dde1743.log` 记录到 frame #7936，包含真实模型标签 S2/S3/S4。
+- `logs/runtime/runtime-20260722-151307-7f59e2d67dde1743.log` 记录到 frame #7936，包含真实模型标签 S2/S3/S4。
 - `node-red/logs/workflow/workflow-20260722-151311-9332.jsonl` 包含 7883 条 `frame_received`。
 - 该次 2026-07-22 日志没有 terminal result，不能据此声明完整业务顺序闭环通过。
 - 2026-07-08 审计中存在 sequence transition/NG 和 db_write_failed，说明结果链路曾被触发，但真实 MySQL 成功写入尚无证据。
@@ -239,7 +239,58 @@ Mock screenshot 不能替代真实文件存在性检查。
 | 真实 MySQL 成功幂等写入 | 未形成正式证据 |
 | 24 小时稳定性 | 未执行 |
 
-## 11. 结果记录模板
+## 11. 自动化验证（T16）
+
+T16 新增了两项自动化验证工具，减少手动验证负担：
+
+### 11.1 Python Verifier — `tools/verify_real_sdk.py`
+
+独立 Python 脚本，通过 stdin/stdout JSONL 协议驱动 `aiban_runner.py`，自动验证 Runtime 层和 Frame 层：
+
+```powershell
+# Mock 模式（开发/CI 环境，验证工具自身）
+python tools/verify_real_sdk.py --mock --output tools/report-t16-mock.json
+
+# 真实 SDK 模式（生产机器）
+python tools/verify_real_sdk.py `
+  --sdk-home D:/product/AiBanWorkSpace `
+  --pipeline-config D:/product/AiBanWorkSpace/abvideo/main-flow.yaml `
+  --output tools/report-t16-live.json
+```
+
+自动验证步骤：
+1. 环境采集（OS、Python、Git commit）
+2. 启动验证（runtime_starting → runtime_ready）
+3. 帧验证（结构与 Mock 契约一致、event_seq 单调）
+4. Health check
+5. Source pause/resume
+6. Screenshot
+7. 停止验证（runtime_stopping → runtime_stopped → exit code 0）
+8. 孤儿进程检查
+
+输出为结构化 JSON 报告，可作为 T16 验收证据。
+
+### 11.2 Node.js 集成测试 — `test/aiban-real-sdk.test.js`
+
+使用真实 `child_process.spawn`（而非 FakeChildProcess）验证协议交换：
+
+```powershell
+# Mock 模式（CI）
+cd node-red-contrib-aiban-workflow
+npm.cmd run test:real-sdk
+
+# 真实 SDK 模式（生产机器）
+$env:REAL_SDK_AVAILABLE="1"
+$env:AIBAN_SDK_HOME="D:/product/AiBanWorkSpace"
+$env:AIBAN_PIPELINE_CONFIG="D:/product/AiBanWorkSpace/abvideo/main-flow.yaml"
+npm.cmd run test:real-sdk
+```
+
+### 11.3 T16 现场验证报告
+
+完整现场验证步骤和记录模板见 [`docs/TEST_REPORT_T16_REAL_SDK.md`](TEST_REPORT_T16_REAL_SDK.md)。
+
+## 12. 结果记录模板
 
 ```text
 测试日期：

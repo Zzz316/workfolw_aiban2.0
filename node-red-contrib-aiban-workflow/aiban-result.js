@@ -1,9 +1,18 @@
-"use strict";
+﻿"use strict";
 
 const path = require("node:path");
-const { TopologyCompiler, FlowRuntime, makeStreamId, makeEventId } = require("./lib/flow-runtime");
+const { TopologyCompiler } = require("./lib/topology-compiler");
+const { SequenceRuntime, makeStreamId, makeEventId } = require("./lib/sequence-runtime");
 const { WorkflowStateStore } = require("./lib/workflow-state-store");
 const { WorkflowAuditLogger, beijingNowISO } = require("./lib/workflow-audit");
+const {
+    DEFAULT_SCENE_ID,
+    ContractValidationError,
+    assertValidOutcome,
+    buildResultFromOutcome,
+    makeResultEventId,
+    toAuditAbcResult,
+} = require("./lib/workflow-contract");
 
 /**
  * aiban-result — Topology-Driven Result Endpoint
@@ -23,6 +32,7 @@ const { WorkflowAuditLogger, beijingNowISO } = require("./lib/workflow-audit");
  * - SQLite state persistence (survives Node-RED restarts)
  * - Restart recovery: expired → INTERRUPTED, active → resume
  * - Manual reset via msg.topic === "aiban-reset"
+ * - Scene switch/disable interruption via msg.topic === "aiban-interrupt"
  * - Audit logging (text + JSONL + CSV)
  */
 
@@ -33,6 +43,8 @@ module.exports = function registerResultNode(RED) {
 
         // === Configuration ===
         const workflowId = config.workflow_id || "abc-sequence-demo";
+        const sceneId = config.scene_id || DEFAULT_SCENE_ID;
+        const resultMode = config.mode || "simple-sequence";
         const cycleTimeoutMs = Math.max(1000, Number(config.cycle_timeout_ms) || 30000);
         const allowSameFrameRestart = config.allow_same_frame_restart === true
             || config.allow_same_frame_restart === "true";
@@ -59,6 +71,38 @@ module.exports = function registerResultNode(RED) {
         let closed = false;
         let _runtimeNode = null; // aiban-runtime node instance (for on-demand screenshot)
         const timeoutTimers = new Map(); // state_key → setTimeout
+        const emittedResultIds = new Set();
+
+        function ensureAuditLogger() {
+            if (!auditLogger) {
+                auditLogger = new WorkflowAuditLogger(auditDir);
+            }
+        }
+
+        function resolveRuntimeNode(entryNodeId) {
+            if (entryNodeId) {
+                _runtimeNode = RED.nodes.getNode(entryNodeId);
+                if (_runtimeNode && _runtimeNode.type === "aiban-scene-entry") {
+                    _runtimeNode = RED.nodes.getNode(_runtimeNode.runtimeNodeId);
+                }
+            }
+            if (!_runtimeNode || _runtimeNode.type !== "aiban-runtime") {
+                RED.nodes.eachNode(function (n) {
+                    if (n.type === "aiban-runtime" && !_runtimeNode) {
+                        _runtimeNode = RED.nodes.getNode(n.id);
+                    }
+                });
+            }
+            if (_runtimeNode && typeof _runtimeNode.requestScreenshot !== "function") {
+                node.warn("[aiban-result] aiban-runtime 节点缺少 requestScreenshot 方法, "
+                    + "截图功能不可用");
+                _runtimeNode = null;
+            }
+            if (_runtimeNode) {
+                node.log(`[aiban-result] 已连接 aiban-runtime (${_runtimeNode.id}), `
+                    + "支持按需截图");
+            }
+        }
 
         // === Lazy initialization on first input ===
         function ensureInitialized() {
@@ -66,7 +110,7 @@ module.exports = function registerResultNode(RED) {
 
             // Initialize stores
             stateStore = new WorkflowStateStore(stateDbPath);
-            auditLogger = new WorkflowAuditLogger(auditDir);
+            ensureAuditLogger();
 
             // Discover topology from deployed wires
             const compiler = new TopologyCompiler(RED);
@@ -87,36 +131,19 @@ module.exports = function registerResultNode(RED) {
 
             // Resolve the upstream aiban-runtime node for on-demand screenshot
             // requests (V1 parity: saveImage at alarm time, not every frame).
-            if (result.entryNodeId) {
-                _runtimeNode = RED.nodes.getNode(result.entryNodeId);
-            }
-            if (!_runtimeNode || _runtimeNode.type !== "aiban-runtime") {
-                // Fallback: search all nodes for an aiban-runtime instance
-                RED.nodes.eachNode(function (n) {
-                    if (n.type === "aiban-runtime" && !_runtimeNode) {
-                        _runtimeNode = RED.nodes.getNode(n.id);
-                    }
-                });
-            }
-            if (_runtimeNode && typeof _runtimeNode.requestScreenshot !== "function") {
-                node.warn("[aiban-result] aiban-runtime 节点缺少 requestScreenshot 方法, "
-                    + "截图功能不可用");
-                _runtimeNode = null;
-            }
-            if (_runtimeNode) {
-                node.log(`[aiban-result] 已连接 aiban-runtime (${_runtimeNode.id}), `
-                    + "支持按需截图");
-            } else {
+            resolveRuntimeNode(result.entryNodeId);
+            if (!_runtimeNode) {
                 node.warn("[aiban-result] 未找到 aiban-runtime 节点, "
                     + "截图功能不可用 — 图片路径将为空");
             }
 
             // Create the runtime engine
-            flowRuntime = new FlowRuntime({
+            flowRuntime = new SequenceRuntime({
                 topology,
                 stateStore,
                 auditLogger,
                 workflowId,
+                sceneId,
                 cycleTimeoutMs,
                 allowSameFrameRestart,
             });
@@ -134,6 +161,24 @@ module.exports = function registerResultNode(RED) {
                 text: `ready | ${labelNames}`,
             });
 
+            return true;
+        }
+
+        function ensureOutcomeInitialized() {
+            ensureAuditLogger();
+            if (!_runtimeNode) {
+                resolveRuntimeNode(null);
+            }
+            if (!_runtimeNode) {
+                node.warn("[aiban-result] outcome 模式未找到 aiban-runtime 节点, "
+                    + "截图功能不可用 — 图片路径将为空");
+            }
+            topology = topology || [];
+            node.status({
+                fill: "green",
+                shape: "ring",
+                text: "ready | outcome",
+            });
             return true;
         }
 
@@ -216,7 +261,8 @@ module.exports = function registerResultNode(RED) {
                 state, "TIMEOUT",
                 `周期超时: 在 ${cycleTimeoutMs}ms 内未完成, `
                 + `当前步骤 ${state.step_index}/${flowRuntime.totalSteps}, `
-                + `实际步骤: ${state.actual_sequence || "[]"}`
+                + `实际步骤: ${state.actual_sequence || "[]"}`,
+                now
             );
             result.cycle_duration_ms = elapsed;
             result.cycle_finished_at = beijingNowISO(now);
@@ -245,14 +291,34 @@ module.exports = function registerResultNode(RED) {
         }
 
         function _makeResultMessage(state, result) {
-            const streamId = makeStreamId(state.group_id, state.source_id);
+            const workflowOutcome = result.workflow_outcome || null;
+            const msgWorkflowId = workflowOutcome ? workflowOutcome.workflow_id : workflowId;
+            const msgSceneId = workflowOutcome ? workflowOutcome.scene_id : sceneId;
+            const streamId = workflowOutcome?.runtime?.stream_id
+                || makeStreamId(state.group_id, state.source_id);
             // Primary idempotency key: result_event_id (Phase 2 contract)
-            result.result_event_id = makeEventId(
-                workflowId, state.session_id, streamId,
-                result.cycle_id, result.result_status
-            );
+            result.result_event_id = result.result_event_id
+                || result.workflow_result?.result_event_id
+                || makeEventId(
+                    msgWorkflowId, state.session_id, streamId,
+                    result.cycle_id, result.result_status
+                );
             // Keep event_id as read-only alias for backward compat
             result.event_id = result.result_event_id;
+            if (workflowOutcome) {
+                result.workflow_outcome = {
+                    ...workflowOutcome,
+                    compatibility: {
+                        ...(workflowOutcome.compatibility || {}),
+                        abc_result_event_id: result.result_event_id,
+                    },
+                };
+                result.workflow_result = buildResultFromOutcome(result.workflow_outcome, {
+                    resultEventId: result.result_event_id,
+                });
+            }
+            const workflowOutcomeForMessage = result.workflow_outcome || workflowOutcome;
+            const workflowResult = result.workflow_result || null;
             return {
                 _msgid: result.result_event_id,
                 topic: streamId,
@@ -265,6 +331,7 @@ module.exports = function registerResultNode(RED) {
                     frame_seq: state.last_frame_seq,
                     group_id: state.group_id,
                     source_id: state.source_id,
+                    scene_id: msgSceneId,
                 },
                 aiban: {
                     event_id: result.result_event_id,
@@ -273,14 +340,46 @@ module.exports = function registerResultNode(RED) {
                     stream_id: streamId,
                     event_seq: state.last_event_seq ?? state.last_frame_seq,
                     frame_seq: state.last_frame_seq,
+                    scene_id: msgSceneId,
                 },
                 workflow: {
-                    workflow_id: workflowId,
+                    workflow_id: msgWorkflowId,
+                    scene_id: msgSceneId,
                     topology: topology ? topology.map((l) => l.labelId) : [],
+                    outcome: workflowOutcomeForMessage,
+                    result: workflowResult,
                 },
                 abc_result: result,
                 _audit: auditLogger,
             };
+        }
+
+        function _resultIdForTerminal(state, result) {
+            const outcome = result.workflow_outcome || null;
+            const wfId = outcome ? outcome.workflow_id : workflowId;
+            const streamId = outcome?.runtime?.stream_id
+                || result.stream_id
+                || makeStreamId(state.group_id, state.source_id);
+            return result.result_event_id
+                || result.workflow_result?.result_event_id
+                || outcome?.compatibility?.abc_result_event_id
+                || makeEventId(wfId, state.session_id, streamId, result.cycle_id, result.result_status);
+        }
+
+        function _rememberTerminal(state, result) {
+            const resultEventId = _resultIdForTerminal(state, result);
+            if (emittedResultIds.has(resultEventId)) {
+                node.status({
+                    fill: "grey",
+                    shape: "ring",
+                    text: `duplicate terminal: ${resultEventId.slice(-16)}`,
+                });
+                return false;
+            }
+            emittedResultIds.add(resultEventId);
+            result.result_event_id = resultEventId;
+            result.event_id = resultEventId;
+            return true;
         }
 
         function _auditFields(state, result, eventType) {
@@ -294,6 +393,7 @@ module.exports = function registerResultNode(RED) {
                 cycle_duration_ms: result.cycle_duration_ms,
                 total_processing_ms: result.stage_duration_ms || 0,
                 workflow_id: workflowId,
+                scene_id: sceneId,
                 event_id: resultEventId,
                 result_event_id: resultEventId,
                 message_id: state.last_message_id || state.last_event_id || "",
@@ -311,6 +411,7 @@ module.exports = function registerResultNode(RED) {
             const summary = {
                 cycle_id: result.cycle_id,
                 workflow_id: workflowId,
+                scene_id: sceneId,
                 stream_id: _makeStreamId(state.group_id, state.source_id),
                 start_frame_seq: state.start_frame_seq,
                 end_frame_seq: state.last_frame_seq,
@@ -331,6 +432,98 @@ module.exports = function registerResultNode(RED) {
             return summary;
         }
 
+        function _stateFromOutcome(outcome, msg) {
+            const runtime = outcome.runtime || {};
+            const groupId = Number(runtime.group_id ?? msg.payload?.group_id ?? msg.aiban?.group_id ?? 0);
+            const sourceId = Number(runtime.source_id ?? msg.payload?.source_id ?? msg.aiban?.source_id ?? 0);
+            const sessionId = runtime.session_id || msg.payload?.session_id || msg.aiban?.session_id || "";
+            const streamId = runtime.stream_id || makeStreamId(groupId, sourceId);
+            const actualSequence = JSON.stringify(outcome.actual_steps || []);
+
+            return {
+                state_key: `${outcome.workflow_id}:${sessionId}:${groupId}:${sourceId}`,
+                workflow_id: outcome.workflow_id,
+                session_id: sessionId,
+                group_id: groupId,
+                source_id: sourceId,
+                stream_id: streamId,
+                step_index: 0,
+                total_steps: Array.isArray(outcome.actual_steps) ? outcome.actual_steps.length : 0,
+                cycle_id: outcome.cycle_id,
+                cycle_started_at_ms: outcome.started_at ? Date.parse(outcome.started_at) : null,
+                start_frame_seq: runtime.start_event_seq ?? msg.payload?.event_seq ?? msg.aiban?.event_seq ?? null,
+                last_frame_seq: runtime.end_event_seq ?? msg.payload?.event_seq ?? msg.aiban?.event_seq ?? null,
+                last_message_id: msg.payload?.event_id || msg.aiban?.event_id || "",
+                steps_data: "{}",
+                actual_sequence: actualSequence,
+            };
+        }
+
+        function _providedResultEventId(msg, outcome) {
+            return msg.workflow?.result?.result_event_id
+                || outcome.compatibility?.abc_result_event_id
+                || msg.abc_result?.result_event_id
+                || msg.abc_result?.event_id
+                || "";
+        }
+
+        function _handleOutcomeInput(msg, send, done) {
+            ensureOutcomeInitialized();
+
+            try {
+                if (!msg.workflow || !msg.workflow.outcome) {
+                    throw new ContractValidationError(
+                        "Invalid workflow outcome",
+                        ["msg.workflow.outcome is required in outcome mode"]
+                    );
+                }
+
+                const outcome = assertValidOutcome(msg.workflow.outcome);
+                const expectedResultEventId = makeResultEventId(outcome);
+                const providedResultEventId = _providedResultEventId(msg, outcome);
+                if (providedResultEventId && providedResultEventId !== expectedResultEventId) {
+                    throw new ContractValidationError(
+                        "Invalid workflow result",
+                        [`result_event_id mismatch: expected ${expectedResultEventId}, got ${providedResultEventId}`]
+                    );
+                }
+
+                const workflowResult = buildResultFromOutcome(outcome, {
+                    resultEventId: expectedResultEventId,
+                });
+                const auditResult = toAuditAbcResult(outcome, {
+                    audit: msg.abc_result || {},
+                    resultEventId: workflowResult.result_event_id,
+                });
+                auditResult.workflow_outcome = outcome;
+                auditResult.workflow_result = workflowResult;
+
+                const state = _stateFromOutcome(outcome, msg);
+                const terminalEvt = {
+                    evt: {
+                        type: "terminal",
+                        stateKey: state.state_key,
+                        state,
+                        outcome,
+                        result: auditResult,
+                    },
+                    result: auditResult,
+                    stageDurationMs: 0,
+                };
+
+                _emitTerminalWithScreenshot(terminalEvt, state.group_id, state.source_id, send, done);
+            } catch (error) {
+                const detail = error.errors ? `: ${error.errors.join("; ")}` : "";
+                node.error(`[aiban-result] outcome 模式校验失败${detail}`, msg);
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "invalid outcome",
+                });
+                if (done) done();
+            }
+        }
+
         // === Main Input Handler ===
         node.on("input", function onInput(msg, send, done) {
             if (closed) {
@@ -345,6 +538,20 @@ module.exports = function registerResultNode(RED) {
                 return;
             }
 
+            if (msg.topic === "aiban-interrupt") {
+                if (ensureInitialized()) {
+                    _handleInterrupt(msg, send);
+                }
+                if (done) done();
+                return;
+            }
+
+            const hasWorkflowOutcome = Boolean(msg.workflow && msg.workflow.outcome);
+            if (resultMode === "outcome" || hasWorkflowOutcome) {
+                _handleOutcomeInput(msg, send, done);
+                return;
+            }
+
             // Lazy initialization
             if (!ensureInitialized()) {
                 if (done) done();
@@ -356,8 +563,8 @@ module.exports = function registerResultNode(RED) {
             try {
                 // Extract key fields for audit — prefer new field names
                 // (event_id / event_seq) from aiban-runtime, falling back
-                // to legacy names (message_id / frame_seq) for backward
-                // compatibility with legacy aiban-runtime versions.
+                // to alternate input names (message_id / frame_seq) when
+                // imported flows still provide them.
                 const payload = msg.payload || {};
                 const aiban = msg.aiban || {};
                 const sessionId = aiban.session_id || payload.session_id || "";
@@ -501,10 +708,35 @@ module.exports = function registerResultNode(RED) {
         function _emitTerminalWithScreenshot(tev, groupId, sourceId, send, done) {
             const { evt, result } = tev;
 
-            function emit(imagePath) {
+            if (!_rememberTerminal(evt.state, result)) {
+                if (done) done();
+                return;
+            }
+
+            function updateEvidence(imagePath, screenshotError) {
                 if (imagePath) {
                     result.image_path = imagePath;
                 }
+                if (screenshotError) {
+                    result.screenshot_error = screenshotError;
+                }
+                if (result.workflow_outcome) {
+                    result.workflow_outcome = {
+                        ...result.workflow_outcome,
+                        evidence: {
+                            ...(result.workflow_outcome.evidence || {}),
+                            image_path: imagePath || result.workflow_outcome.evidence?.image_path || "",
+                            screenshot_error: screenshotError || result.workflow_outcome.evidence?.screenshot_error || null,
+                        },
+                    };
+                    result.workflow_result = buildResultFromOutcome(result.workflow_outcome, {
+                        resultEventId: result.result_event_id,
+                    });
+                }
+            }
+
+            function emit(imagePath) {
+                updateEvidence(imagePath, null);
 
                 // Build and send message
                 const resultMsg = _makeResultMessage(evt.state, result);
@@ -546,6 +778,7 @@ module.exports = function registerResultNode(RED) {
                     })
                     .catch(function (err) {
                         node.warn(`[aiban-result] 截图失败: ${err.message}`);
+                        updateEvidence("", err.message);
                         emit(""); // emit without image_path
                     });
             } else {
@@ -573,7 +806,8 @@ module.exports = function registerResultNode(RED) {
                 const result = flowRuntime._buildTerminalResult(
                     prev, "INTERRUPTED",
                     `手动重置: ${msg.payload?.reason || "manual"}`
-                    + ` by ${msg.payload?.operator || "unknown"}`
+                    + ` by ${msg.payload?.operator || "unknown"}`,
+                    now
                 );
                 result.cycle_finished_at = beijingNowISO(now);
                 send(_makeResultMessage(prev, result));
@@ -582,6 +816,71 @@ module.exports = function registerResultNode(RED) {
                 fill: "blue",
                 shape: "dot",
                 text: `reset: ${resetKey}`,
+            });
+        }
+
+        function _handleInterrupt(msg, send) {
+            const payload = msg.payload || {};
+            const requestedWorkflowId = payload.workflow_id
+                || msg.aiban?.workflow_id
+                || msg.workflow?.workflow_id
+                || workflowId;
+            const requestedSceneId = payload.scene_id
+                || msg.aiban?.scene_id
+                || msg.workflow?.scene_id
+                || sceneId;
+            if (requestedWorkflowId !== workflowId || requestedSceneId !== sceneId) {
+                node.warn(
+                    `[aiban-result] ignoring interrupt for another scene: `
+                    + `${requestedWorkflowId}/${requestedSceneId}`
+                );
+                return;
+            }
+
+            const hasGroup = payload.group_id !== undefined
+                || msg.aiban?.group_id !== undefined;
+            const hasSource = payload.source_id !== undefined
+                || msg.aiban?.source_id !== undefined;
+            const hasSession = Boolean(payload.session_id || msg.aiban?.session_id);
+            const groupId = Number(payload.group_id ?? msg.aiban?.group_id);
+            const sourceId = Number(payload.source_id ?? msg.aiban?.source_id);
+            const sessionId = String(payload.session_id || msg.aiban?.session_id || "");
+            const reason = payload.reason || "scene-disabled-or-switched";
+            const now = Date.now();
+            let interrupted = 0;
+
+            for (const state of stateStore.listActive()) {
+                if (state.workflow_id !== workflowId
+                    || (hasGroup && state.group_id !== groupId)
+                    || (hasSource && state.source_id !== sourceId)
+                    || (hasSession && state.session_id !== sessionId)
+                    || !flowRuntime._isActive(state)) {
+                    continue;
+                }
+                _clearTimeout(state.state_key);
+                const result = flowRuntime._buildTerminalResult(
+                    state,
+                    "INTERRUPTED",
+                    `Scene disabled or switched: ${reason}`,
+                    now
+                );
+                stateStore.resetState(state.state_key);
+                if (!_rememberTerminal(state, result)) {
+                    continue;
+                }
+                auditLogger.record(
+                    "sequence_interrupted",
+                    _auditFields(state, result, "INTERRUPTED")
+                );
+                auditLogger.recordCycleSummary(_cycleSummary(state, result));
+                send(_makeResultMessage(state, result));
+                interrupted++;
+            }
+
+            node.status({
+                fill: "yellow",
+                shape: "dot",
+                text: `INTERRUPTED: ${interrupted}`,
             });
         }
 
@@ -617,7 +916,9 @@ module.exports = function registerResultNode(RED) {
         color: "#FFA07A",
         defaults: {
             name: { value: "结果判定" },
+            mode: { value: "simple-sequence" },
             workflow_id: { value: "abc-sequence-demo" },
+            scene_id: { value: DEFAULT_SCENE_ID },
             cycle_timeout_ms: { value: 30000 },
             allow_same_frame_restart: { value: false },
             stateDbPath: { value: "data/workflow/flow-state.db" },
@@ -632,3 +933,4 @@ module.exports = function registerResultNode(RED) {
         },
     });
 };
+

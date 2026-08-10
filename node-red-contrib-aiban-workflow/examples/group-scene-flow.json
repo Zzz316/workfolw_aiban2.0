@@ -1,0 +1,292 @@
+[
+    {
+        "id": "example-main-tab",
+        "type": "tab",
+        "label": "Example · Scene Main",
+        "disabled": false,
+        "info": "Mock Runtime → Scene Router → diagnostics"
+    },
+    {
+        "id": "example-scene-tab",
+        "type": "tab",
+        "label": "group/1/scene/plug-sequence",
+        "disabled": false,
+        "info": "Importable Mock scene example. Create, enable and select plug-sequence through the Scene Registry API after the Mock Runtime is READY."
+    },
+    {
+        "id": "example-runtime",
+        "type": "aiban-runtime",
+        "z": "example-main-tab",
+        "name": "Mock Runtime",
+        "pythonPath": "python",
+        "runnerPath": "",
+        "sdkHome": "",
+        "pipelineConfig": "",
+        "workingDirectory": "",
+        "useMock": true,
+        "startupTimeoutMs": 30000,
+        "shutdownTimeoutMs": 10000,
+        "heartbeatIntervalMs": 5000,
+        "heartbeatTimeoutMs": 15000,
+        "restartPolicy": "never",
+        "maxRestartCount": 3,
+        "restartBackoffMs": 5000,
+        "autoStart": true,
+        "x": 150,
+        "y": 100,
+        "wires": [
+            [
+                "example-router"
+            ],
+            [
+                "example-status-debug"
+            ],
+            [
+                "example-error-debug"
+            ]
+        ]
+    },
+    {
+        "id": "example-router",
+        "type": "aiban-scene-router",
+        "z": "example-main-tab",
+        "name": "Scene Router",
+        "runtimeNodeId": "example-runtime",
+        "routes": "[{\"route_id\":\"example-plug-sequence\",\"group_id\":1,\"scene_id\":\"plug-sequence\"}]",
+        "outputs": 2,
+        "x": 390,
+        "y": 100,
+        "wires": [
+            [
+                "example-link-out"
+            ],
+            [
+                "example-route-debug"
+            ]
+        ]
+    },
+    {
+        "id": "example-link-out",
+        "type": "link out",
+        "z": "example-main-tab",
+        "name": "→ plug-sequence",
+        "mode": "link",
+        "links": [
+            "example-link-in"
+        ],
+        "x": 595,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "example-route-debug",
+        "type": "debug",
+        "z": "example-main-tab",
+        "name": "路由诊断",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 620,
+        "y": 160,
+        "wires": []
+    },
+    {
+        "id": "example-status-debug",
+        "type": "debug",
+        "z": "example-main-tab",
+        "name": "Runtime 状态",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 400,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "example-error-debug",
+        "type": "debug",
+        "z": "example-main-tab",
+        "name": "Runtime 错误",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 400,
+        "y": 230,
+        "wires": []
+    },
+    {
+        "id": "example-link-in",
+        "type": "link in",
+        "z": "example-scene-tab",
+        "name": "来自 Scene Router",
+        "links": [
+            "example-link-out"
+        ],
+        "x": 95,
+        "y": 100,
+        "wires": [
+            [
+                "example-entry"
+            ]
+        ]
+    },
+    {
+        "id": "example-entry",
+        "type": "aiban-scene-entry",
+        "z": "example-scene-tab",
+        "name": "Scene Entry",
+        "runtimeNodeId": "example-runtime",
+        "group_id": 1,
+        "scene_id": "plug-sequence",
+        "workflow_id": "group/1/scene/plug-sequence",
+        "x": 250,
+        "y": 100,
+        "wires": [
+            [
+                "example-label-1"
+            ],
+            [
+                "example-entry-debug"
+            ]
+        ]
+    },
+    {
+        "id": "example-label-1",
+        "type": "aiban-label",
+        "z": "example-scene-tab",
+        "name": "1",
+        "label_id": "1",
+        "model_id": "0",
+        "label": "插接1",
+        "confidence": "0.80",
+        "frame_count": "1",
+        "is_end": false,
+        "alarm_name": "漏插接",
+        "x": 430,
+        "y": 100,
+        "wires": [
+            [
+                "example-label-2"
+            ]
+        ]
+    },
+    {
+        "id": "example-label-2",
+        "type": "aiban-label",
+        "z": "example-scene-tab",
+        "name": "2",
+        "label_id": "2",
+        "model_id": "0",
+        "label": "插接2",
+        "confidence": "0.80",
+        "frame_count": "1",
+        "is_end": false,
+        "alarm_name": "漏插接",
+        "x": 570,
+        "y": 100,
+        "wires": [
+            [
+                "example-label-3"
+            ]
+        ]
+    },
+    {
+        "id": "example-label-3",
+        "type": "aiban-label",
+        "z": "example-scene-tab",
+        "name": "3",
+        "label_id": "3",
+        "model_id": "0",
+        "label": "插接3",
+        "confidence": "0.80",
+        "frame_count": "1",
+        "is_end": false,
+        "alarm_name": "漏插接",
+        "x": 710,
+        "y": 100,
+        "wires": [
+            [
+                "example-label-end"
+            ]
+        ]
+    },
+    {
+        "id": "example-label-end",
+        "type": "aiban-label",
+        "z": "example-scene-tab",
+        "name": "end",
+        "label_id": "end",
+        "model_id": "0",
+        "label": "end",
+        "confidence": "0.95",
+        "frame_count": "1",
+        "is_end": true,
+        "alarm_name": "",
+        "x": 850,
+        "y": 100,
+        "wires": [
+            [
+                "example-result"
+            ]
+        ]
+    },
+    {
+        "id": "example-result",
+        "type": "aiban-result",
+        "z": "example-scene-tab",
+        "name": "Scene Result",
+        "mode": "simple-sequence",
+        "workflow_id": "group/1/scene/plug-sequence",
+        "scene_id": "plug-sequence",
+        "cycle_timeout_ms": 30000,
+        "allow_same_frame_restart": true,
+        "stateDbPath": "data/workflow/example-scene-state.db",
+        "auditDir": "logs/workflow/example-scene",
+        "x": 1020,
+        "y": 100,
+        "wires": [
+            [
+                "example-result-debug"
+            ]
+        ]
+    },
+    {
+        "id": "example-result-debug",
+        "type": "debug",
+        "z": "example-scene-tab",
+        "name": "OK / NG / TIMEOUT / INTERRUPTED",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 1270,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "example-entry-debug",
+        "type": "debug",
+        "z": "example-scene-tab",
+        "name": "入口身份诊断",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "x": 440,
+        "y": 160,
+        "wires": []
+    }
+]

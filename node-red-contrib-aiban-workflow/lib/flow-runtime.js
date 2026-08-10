@@ -1,7 +1,13 @@
-"use strict";
+﻿"use strict";
 
 const { randomUUID } = require("node:crypto");
 const { beijingNowISO } = require("./workflow-audit");
+const {
+    DEFAULT_SCENE_ID,
+    buildResultFromOutcome,
+    normalizeOutcome,
+    toAuditAbcResult,
+} = require("./workflow-contract");
 
 /**
  * flow-runtime — Topology-driven sequence state machine engine.
@@ -124,6 +130,7 @@ class TopologyCompiler {
                     frame_count: n.frame_count,
                     is_end: n.is_end,
                     alarm_name: n.alarm_name,
+                    runtime_node_id: n.runtime_node_id || n.runtimeNodeId,
                 });
             });
         }
@@ -194,6 +201,7 @@ class TopologyCompiler {
                 const entryPreds = predecessors.filter(
                     (n) =>
                         n.type === "aiban-runtime" ||
+                        n.type === "aiban-scene-entry" ||
                         n.type === "inject" ||
                         n.type === "aiban-result" // in case of chaining
                 );
@@ -214,7 +222,10 @@ class TopologyCompiler {
     _findEntry(firstLabelNodeId, reverseMap, allNodes) {
         const predecessors = reverseMap[firstLabelNodeId] || [];
         const entry = predecessors.find(
-            (n) => n.type === "aiban-runtime" || n.type === "inject"
+            (n) =>
+                n.type === "aiban-runtime"
+                || n.type === "aiban-scene-entry"
+                || n.type === "inject"
         );
         return entry ? entry.id : null;
     }
@@ -309,6 +320,7 @@ class FlowRuntime {
      * @param {object} opts.stateStore - WorkflowStateStore instance
      * @param {object} opts.auditLogger - WorkflowAuditLogger instance
      * @param {string} opts.workflowId
+     * @param {string} opts.sceneId
      * @param {number} opts.cycleTimeoutMs
      * @param {boolean} opts.allowSameFrameRestart
      */
@@ -320,6 +332,7 @@ class FlowRuntime {
         this.stateStore = opts.stateStore;
         this.auditLogger = opts.auditLogger;
         this.workflowId = opts.workflowId || "abc-sequence-demo";
+        this.sceneId = opts.sceneId || DEFAULT_SCENE_ID;
         this.cycleTimeoutMs = Math.max(1, Number(opts.cycleTimeoutMs) || 30000);
         this.allowSameFrameRestart = Boolean(opts.allowSameFrameRestart);
 
@@ -430,7 +443,7 @@ class FlowRuntime {
         const groupId = Number(payload.group_id ?? aiban.group_id ?? 0);
         const sourceId = Number(payload.source_id ?? aiban.source_id ?? 0);
         // Prefer new field names (event_seq / event_id) from aiban-runtime.
-        // Fall back to legacy names (frame_seq / message_id) for backward compat.
+        // Fall back to alternate names (frame_seq / message_id) if imported flows provide them.
         const eventSeq = Number(
             aiban.event_seq ?? payload.event_seq
             ?? aiban.frame_seq ?? payload.frame_seq ?? 0
@@ -477,6 +490,7 @@ class FlowRuntime {
                     type: "terminal",
                     stateKey,
                     state: { ...state },
+                    outcome: result.workflow_outcome,
                     result,
                 });
                 this.stateStore.resetState(stateKey);
@@ -504,14 +518,16 @@ class FlowRuntime {
                     type: "terminal",
                     stateKey,
                     state: { ...state },
+                    outcome: result.workflow_outcome,
                     result,
                 });
             } else {
                 // IDLE state → create a minimal terminal result
                 const streamId = makeStreamId(groupId, sourceId);
+                const idleCycleId = randomUUID();
                 const resultEventId = makeEventId(
                     this.workflowId, sessionId, streamId,
-                    randomUUID(), status
+                    idleCycleId, status
                 );
                 // Look up the first expected step's alarm_name for NG
                 const firstExpected = this._expectedLabelId(0);
@@ -524,6 +540,30 @@ class FlowRuntime {
                         idleMissingAlarmName = firstDef.alarmName;
                     }
                 }
+                const idleResult = this._attachWorkflowContract({
+                    cycle_id: idleCycleId,
+                    previous_state: "IDLE",
+                    current_state: "IDLE",
+                    recognized_step: null,
+                    expected_step: firstExpected,
+                    result_status: status,
+                    failure_reason: reason || null,
+                    missing_step_alarm_name: idleMissingAlarmName,
+                    cycle_started_at: null,
+                    cycle_finished_at: beijingNowISO(nowMs),
+                    cycle_duration_ms: null,
+                    result_event_id: resultEventId,
+                    event_id: resultEventId,
+                    stage_duration_ms: 0,
+                    actual_sequence: "[]",
+                    session_id: sessionId,
+                    group_id: groupId,
+                    source_id: sourceId,
+                    stream_id: streamId,
+                    start_frame_seq: eventSeq,
+                    end_frame_seq: eventSeq,
+                    steps_data: "{}",
+                });
                 events.push({
                     type: "terminal",
                     stateKey,
@@ -541,30 +581,8 @@ class FlowRuntime {
                         last_frame_seq: eventSeq,
                         last_message_id: eventId,
                     },
-                    result: {
-                        cycle_id: null,
-                        previous_state: "IDLE",
-                        current_state: "IDLE",
-                        recognized_step: null,
-                        expected_step: firstExpected,
-                        result_status: status,
-                        failure_reason: reason || null,
-                        missing_step_alarm_name: idleMissingAlarmName,
-                        cycle_started_at: null,
-                        cycle_finished_at: beijingNowISO(nowMs),
-                        cycle_duration_ms: null,
-                        result_event_id: resultEventId,
-                        event_id: resultEventId,
-                        stage_duration_ms: 0,
-                        actual_sequence: "[]",
-                        session_id: sessionId,
-                        group_id: groupId,
-                        source_id: sourceId,
-                        stream_id: streamId,
-                        start_frame_seq: eventSeq,
-                        end_frame_seq: eventSeq,
-                        steps_data: "{}",
-                    },
+                    outcome: idleResult.workflow_outcome,
+                    result: idleResult,
                 });
             }
             return events;
@@ -657,6 +675,7 @@ class FlowRuntime {
                             type: "terminal",
                             stateKey,
                             state: { ...newState },
+                            outcome: result.workflow_outcome,
                             result,
                         });
                     }
@@ -775,6 +794,7 @@ class FlowRuntime {
                         type: "terminal",
                         stateKey,
                         state: { ...completedState },
+                        outcome: result.workflow_outcome,
                         result,
                     });
                 }
@@ -811,6 +831,7 @@ class FlowRuntime {
                 type: "terminal",
                 stateKey,
                 state: { ...state },
+                outcome: result.workflow_outcome,
                 result,
             });
         } else if (hasRepeat && !hasExpected) {
@@ -835,6 +856,7 @@ class FlowRuntime {
                 type: "terminal",
                 stateKey,
                 state: { ...state },
+                outcome: result.workflow_outcome,
                 result,
             });
         } else {
@@ -850,11 +872,37 @@ class FlowRuntime {
                 type: "terminal",
                 stateKey,
                 state: { ...state },
+                outcome: result.workflow_outcome,
                 result,
             });
         }
 
         return events;
+    }
+
+    _attachWorkflowContract(auditResult) {
+        const outcome = normalizeOutcome({
+            ...auditResult,
+            workflow_id: this.workflowId,
+            scene_id: auditResult.scene_id || this.sceneId,
+            status: auditResult.result_status,
+            finished_at: auditResult.cycle_finished_at,
+        }, {
+            workflowId: this.workflowId,
+            sceneId: this.sceneId,
+            resultEventId: auditResult.result_event_id,
+        });
+        const workflowResult = buildResultFromOutcome(outcome, {
+            resultEventId: auditResult.result_event_id,
+        });
+        return toAuditAbcResult(outcome, {
+            audit: {
+                ...auditResult,
+                workflow_outcome: outcome,
+                workflow_result: workflowResult,
+            },
+            resultEventId: auditResult.result_event_id,
+        });
     }
 
     /**
@@ -884,7 +932,7 @@ class FlowRuntime {
             this.workflowId, state.session_id, streamId,
             state.cycle_id || randomUUID(), status
         );
-        return {
+        return this._attachWorkflowContract({
             cycle_id: state.cycle_id,
             previous_state: this._stateName(state.step_index),
             current_state: "IDLE",
@@ -913,7 +961,7 @@ class FlowRuntime {
             end_frame_seq: state.last_frame_seq,
             steps_data: state.steps_data,
             image_path: state.image_path || state.last_image_path || "",
-        };
+        });
     }
 
     /**
@@ -970,7 +1018,7 @@ class FlowRuntime {
                     nowMs
                 );
                 this.stateStore.resetState(state.state_key);
-                results.push({ state, result });
+                results.push({ state, outcome: result.workflow_outcome, result });
             }
         }
         return results;
@@ -985,3 +1033,4 @@ module.exports = {
     makeEventId,
     makeStreamId,
 };
+

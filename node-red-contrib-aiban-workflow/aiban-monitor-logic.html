@@ -1,0 +1,22 @@
+<script type="text/javascript">
+    RED.nodes.registerType("aiban-monitor-logic", {
+        category: "艾班工作流", color: "#F9D5A7",
+        defaults: {
+            name: { value: "Monitor 2.0" },
+            workflowId: { value: "group/1/scene/monitor", required: true },
+            sceneId: { value: "monitor", required: true },
+            rulesJson: { value: "[]", required: true }
+        },
+        inputs: 1, outputs: 2,
+        outputLabels: ["标准 outcome", "diagnostic"],
+        icon: "font-awesome/fa-eye",
+        label: function () { return this.name || "Monitor 2.0"; }
+    });
+</script>
+<script type="text/html" data-template-name="aiban-monitor-logic">
+    <div class="form-row"><label>名称</label><input type="text" id="node-input-name"></div>
+    <div class="form-row"><label>Workflow ID</label><input type="text" id="node-input-workflowId"></div>
+    <div class="form-row"><label>Scene ID</label><input type="text" id="node-input-sceneId"></div>
+    <div class="form-row"><label>规则 JSON</label><textarea id="node-input-rulesJson" rows="12" style="width:70%"></textarea></div>
+</script>
+<script type="text/html" data-help-name="aiban-monitor-logic"><p>持续存在/缺失、帧数/时长阈值、cooldown 和多 source 隔离；输出标准 outcome。</p></script>

@@ -28,6 +28,9 @@ test("edit dialog exposes real status plus start, stop and restart controls", ()
     assert.match(editorHtml, /id="aiban-runtime-start"/);
     assert.match(editorHtml, /id="aiban-runtime-stop"/);
     assert.match(editorHtml, /id="aiban-runtime-restart"/);
+    assert.match(editorHtml, /ready_metadata_summary/);
+    assert.match(editorHtml, /groups=/);
+    assert.match(editorHtml, /metadata=未就绪/);
     for (const state of [
         "STOPPED",
         "STARTING",
