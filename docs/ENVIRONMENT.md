@@ -1,7 +1,7 @@
 # 现场环境记录
 
-> 记录日期：2026-07-02
-> 记录人：Phase 0 基线建立
+> 记录日期：2026-08-26
+> 说明：2.0-only 仓库环境；1.0 Flask/ZeroMQ/Python scene 运行链路已移除
 
 ---
 
@@ -20,23 +20,16 @@
 | 项目 | 值 |
 |------|-----|
 | 版本 | Python 3.9.13 |
-| 路径 | `C:\Users\s2017088\AppData\Local\Programs\Python\Python39\python.exe` |
-| venv | `icameraapi/venv/` |
+| 路径 | `D:\my_env\python.exe` |
+| 环境目录 | `D:\my_env\`（仓库外） |
 
-关键依赖（`icameraapi/my_reqs.txt`）：
+2.0 Python Runner 依赖（`requirements-v2.txt`）：
 
 | 包 | 版本 |
 |-----|------|
-| Flask | 3.1.2 |
-| NumPy | 1.24.4 |
-| Pandas | 1.5.3 |
-| PyMySQL | 1.1.2 |
 | PyYAML | 6.0.3 |
-| Requests | 2.32.5 |
-| OpenPyXL | 3.1.5 |
-| DBUtils | 3.1.2 |
-| Werkzeug | 3.1.5 |
-| Redis | 4.6.0 |
+
+MySQL 副作用由 Node-RED 包中的 `mysql2` 负责；Python Runner 不再依赖 Flask、ZeroMQ 或 PyMySQL。
 
 ---
 
@@ -56,7 +49,7 @@
 
 | 项目 | 值 |
 |------|-----|
-| SDK 目录 | `icameraapi/` |
+| SDK 目录 | `D:/product/AiBanWorkSpace/`（仓库外） |
 | SDK 库 | `libAiBanVideoPy3_9` |
 | 部署路径 | `D:/product/AiBanWorkSpace/` |
 | Pipeline YAML | `D:/product/AiBanWorkSpace/abvideo/main-flow.yaml` |

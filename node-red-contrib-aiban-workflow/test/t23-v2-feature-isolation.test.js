@@ -110,9 +110,21 @@ test("T23 2.0 feature coverage on isolated runtime", async t => {
     await t.test("published Node-RED package exposes only 2.0 nodes and current runtime dependencies", () => {
         const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8"));
         const nodeNames = Object.keys(pkg["node-red"].nodes);
-        assert.equal(nodeNames.some(name => name.startsWith("workflow-")), false);
+        assert.match(pkg.version, /^2\.0\./);
+        assert.equal(nodeNames.every(name => name.startsWith("aiban-")), true);
         assert.equal(Boolean(pkg.dependencies.zeromq), false);
         assert.ok(nodeNames.includes("aiban-api-trigger"));
         assert.ok(nodeNames.includes("aiban-socket-output"));
+    });
+
+    await t.test("repository contains no 1.0 runtime or Python bridge dependencies", () => {
+        const root = path.resolve(__dirname, "../..");
+        const requirements = fs.readFileSync(path.join(root, "requirements-v2.txt"), "utf8");
+        assert.equal(fs.existsSync(path.join(root, "icameraapi")), false);
+        assert.equal(fs.existsSync(path.join(root, "scenes")), false);
+        assert.equal(fs.existsSync(path.join(root, "core")), false);
+        assert.equal(fs.existsSync(path.join(root, "workflows")), false);
+        assert.doesNotMatch(requirements, /^\s*pyzmq(?:[<>=!~]|\s|$)/mi);
+        assert.doesNotMatch(requirements, /^\s*pymysql(?:[<>=!~]|\s|$)/mi);
     });
 });

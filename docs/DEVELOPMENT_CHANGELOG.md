@@ -22,11 +22,26 @@
 
 | 文档 | 当前版本 | 日期 | 状态 |
 |---|---|---|---|
-| `WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md` | v3.0.15 | 2026-08-09 | 当前有效 |
-| `WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md` | v1.0.15 | 2026-08-09 | 当前有效 |
+| `WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md` | v3.0.16 | 2026-08-26 | 当前有效 |
+| `WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md` | v1.0.16 | 2026-08-26 | 当前有效 |
 | `docs/BASELINE_2026-07-22.md` | v1.0.0 | 2026-07-22 | M0 验收基线 |
 
 ## 变更记录
+
+### 2026-08-26
+
+#### 开发计划 v3.0.16 / 开发任务说明书 v1.0.16
+
+- 删除 1.0 `icameraapi/` Flask 后端、`scenes/` Python handler 及其本地虚拟环境和运行残留。
+- 从 Python 依赖中移除 `pyzmq`、`PyMySQL`，2.0 Runner 仅保留 Pipeline YAML 解析依赖。
+- 删除 Scene Manager HTML 中停用的 1.0 localStorage 脚本，保留显式 `?demo=1` 的 2.0 演示模式。
+- Node-RED 包切换为 `2.0.0-rc.1`，清理作者占位符并同步本地依赖锁文件。
+- 发布门禁新增 2.0 版本、旧路径、旧 Python 依赖、锁文件一致性和 ZeroMQ 残留检查。
+- 删除 Node-RED 自动生成缓存中仍登记的 `workflow-*` 1.0 节点，并增加运行态缓存门禁；缓存会在下次启动时按 2.0 包自动重建。
+- 删除依赖目录中记录 `1.1.0/1.3.0` 和 ZeroMQ 的 npm 内部锁缓存，并增加内部锁缓存一致性门禁。
+- Node.js 全量回归更新为 219/219，Python unittest 保持 11/11；2.0 Scene Manager 浏览器验证无控制台错误。
+
+本次只收口仓库发布面，不改变 T16～T18 的现场验收状态；正式发布仍保持 `BLOCKED`。
 
 ### 2026-08-09
 

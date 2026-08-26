@@ -1,6 +1,6 @@
 # AiBan Workflow 2.0 功能清单
 
-更新日期：2026-08-09
+更新日期：2026-08-26
 
 本文件只描述 2.0 原生能力和发布面。
 
@@ -54,4 +54,6 @@
 
 2.0 Node-RED 包只发布 `aiban-*` 节点；Runtime 只走 Python Runner 的 stdin/stdout JSON Lines 进程协议；业务逻辑只通过 Scene、outcome/result、Advanced Sequence、Monitor、Timer Record 和 Custom Flow 扩展。
 
-发布门禁 `tools/release_gate.js` 会阻止非 `aiban-*` 节点和不属于当前 Runtime 链路的底层传输依赖进入 2.0 Node-RED 包。
+仓库不包含 1.0 的 `icameraapi/` Flask 后端、`scenes/`/`core/`/`workflows/` Python handler 框架、ZeroMQ 帧桥或 PyMySQL 业务写库链路。Python 侧只保留 SDK 适配和 Pipeline YAML 解析，业务数据库由 Node-RED 2.0 节点处理。
+
+发布门禁 `tools/release_gate.js` 会阻止旧运行目录、非 `aiban-*` 节点、旧 Python 依赖、过期锁文件和不属于当前 Runtime 链路的底层传输依赖进入 2.0 发布面。

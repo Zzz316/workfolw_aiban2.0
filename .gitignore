@@ -5,9 +5,6 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
-icameraapi/venv/
-# Preserved metadata from the former standalone icameraapi Git repository.
-icameraapi/.git.icameraapi-backup/
 
 # Node dependencies (custom node source is tracked at repository root)
 node_modules/

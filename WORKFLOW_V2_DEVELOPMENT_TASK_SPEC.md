@@ -1,7 +1,7 @@
 # AiBan Workflow 2.0 开发任务说明书
 
-> 文档版本：v1.0.15<br>
-> 更新日期：2026-08-09<br>
+> 文档版本：v1.0.16<br>
+> 更新日期：2026-08-26<br>
 > 上位计划：[`WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md`](WORKFLOW_V2_AI_DEVELOPMENT_PLAN.md)<br>
 > 使用方式：每次只领取一个主任务；开始前核对依赖，结束时按验收标准提交证据。
 
@@ -124,7 +124,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 | M3 Group 元数据 | T09～T10 | 100% | Python 权威解析器、脱敏 YAML 夹具、Runner ready metadata、Node-RED 状态接口缓存、编辑器摘要、31/31 Python 和 143/143 Node 测试通过 | 无 | 0 | 计划 08-28～09-03；实际 07-24 | 07-24 |
 | M3 Scene Registry/前端 | T11～T13 | 100% | SQLite Store/API、revision、权限、真实前端客户端和浏览器验收完成 | 真实现场账号权限仍在 T16 复核 | 0 | 计划 09-04～09-21；实际 07-29 | 07-29 |
 | M4 Scene 路由/子流程 | T14～T15 | 100% | control/router/entry、固定端口、隔离、中断语义、首场景迁移和 Mock 示例完成 | 真实 SDK 帧闭环属于 T16 | 0 | 计划 09-22～10-02；实际 07-29 | 07-29 |
-| M5 真实生产闭环 | T16～T18 | 65% | T16 Mock 闭环和验证器完成；T17 schema/幂等队列/API ledger 完成；T18 24h harness 与短时双 source 冒烟完成；Node 全量 218/218 | 真实 SDK 原生 DLL 修复、真实 MySQL/API、24h 和完整故障矩阵 | 7 | 10-05～10-20 | 10-20 |
+| M5 真实生产闭环 | T16～T18 | 65% | T16 Mock 闭环和验证器完成；T17 schema/幂等队列/API ledger 完成；T18 24h harness 与短时双 source 冒烟完成；Node 全量 219/219 | 真实 SDK 原生 DLL 修复、真实 MySQL/API、24h 和完整故障矩阵 | 7 | 10-05～10-20 | 10-20 |
 | M6 Sequence 完整能力 | T19 | 100% | 独立 Advanced Sequence 规则层、持久状态、10/10 专项和示例完成 | 现场标签映射复核 | 0 | 计划 10-21～11-03；开发实际 08-01 | 08-01 |
 | M6 Monitor/Timer | T20 | 100% | 独立 Monitor/Timer Record 规则层、恢复/中断策略、10/10 专项和示例完成 | 现场 scene/业务表绑定复核 | 0 | 计划 11-04～11-17；开发实际 08-01 | 08-01 |
 | M6 Custom Flow | T21 | 100% | `aiban-custom-flow`、受控 JSON DSL、变量/timer/guard、示例 flow、8 项专项完成 | 现场 Custom Flow 标签/业务表映射复核 | 0 | 计划 11-18～12-01；开发实际 08-09 | 08-09 |
@@ -178,7 +178,7 @@ powershell -ExecutionPolicy Bypass -File tools/check-orphan-python.ps1
 | T19 | 补齐 Sequence 业务能力 | P2 | 100% | DONE | 0 | 计划 10-21～11-03；开发实际 08-01 | T08、T15 | Advanced Sequence 独立规则层、持久化、全部候选能力、10/10 专项和示例完成 |
 | T20 | 迁移 Monitor 与 Timer Record | P2 | 100% | DONE | 0 | 计划 11-04～11-17；开发实际 08-01 | T08、T15 | Monitor/Timer Record 独立规则层、scene/outcome、恢复/中断、10/10 专项和示例完成 |
 | T21 | Custom Flow 受控扩展 | P2 | 100% | DONE | 0 | 计划 11-18～12-01；开发实际 08-09 | T20 | 新增 `CustomFlowRuntime` 和 `aiban-custom-flow`，变量/timer/guard/恢复/中断/安全边界 8 项专项及示例完成 |
-| T22 | 运行管理、双跑、回退和发布 | P1 | 100% | DONE | 0 | 计划 12-02～12-15；开发实际 08-09 | T18、T19～T21 | 新增发布门禁工具和文档；当前门禁阻塞 T16～T18 现场验收和签字，不允许误发 v2.0.0 |
+| T22 | 运行管理、双跑、回退和发布 | P1 | 100% | DONE | 0 | 计划 12-02～12-15；开发实际 08-09；2.0-only 收口 08-26 | T18、T19～T21 | 发布门禁已覆盖 2.0 包版本、1.0 路径/依赖、锁文件、T16～T18 现场验收和签字，不允许误发 v2.0.0 |
 
 计划日期是基准窗口。任务进入 `BLOCKED`、实际人日偏差超过 30% 或依赖延迟超过 2 个开发日时，必须更新本表和里程碑日期。
 

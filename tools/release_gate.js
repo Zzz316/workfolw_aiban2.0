@@ -39,6 +39,31 @@ const REQUIRED_EXAMPLES = [
     "node-red-contrib-aiban-workflow/examples/t21-custom-flow.json",
 ];
 
+const LEGACY_PATHS = [
+    "icameraapi",
+    "scenes",
+    "core",
+    "workflows",
+];
+
+const FORBIDDEN_PYTHON_DEPENDENCIES = ["pyzmq", "pymysql"];
+
+const NODE_RED_CACHE_FILES = [
+    "node-red/.config.nodes.json",
+    "node-red/.config.nodes.json.backup",
+];
+
+const GENERATED_NPM_LOCK_FILES = [
+    {
+        path: "node-red/node_modules/.package-lock.json",
+        packageKey: "../node-red-contrib-aiban-workflow",
+    },
+    {
+        path: "node-red-contrib-aiban-workflow/node_modules/.package-lock.json",
+        packageKey: null,
+    },
+];
+
 function exists(root, relativePath) {
     return fs.existsSync(path.join(root, relativePath));
 }
@@ -64,8 +89,14 @@ function evaluateReleaseGate(root = process.cwd(), env = process.env) {
     } else {
         const pkg = JSON.parse(readText(root, packagePath));
         const nodes = pkg["node-red"]?.nodes || {};
+        const packageVersionOk = /^2\.0\./.test(String(pkg.version || ""));
+        checks.push({ id: "package:version-2.0", ok: packageVersionOk });
+        if (!packageVersionOk) blockers.push(`Node-RED package version is not 2.0.x: ${pkg.version || "missing"}`);
+        const authorOk = !pkg.author || !/^your name$/i.test(String(pkg.author).trim());
+        checks.push({ id: "package:author-metadata", ok: authorOk });
+        if (!authorOk) blockers.push("Node-RED package author metadata is still a placeholder");
         for (const nodeName of Object.keys(nodes)) {
-            if (nodeName.startsWith("workflow-")) blockers.push(`non-2.0 node is still published: ${nodeName}`);
+            if (!nodeName.startsWith("aiban-")) blockers.push(`non-2.0 node is still published: ${nodeName}`);
         }
         if (pkg.dependencies?.zeromq) blockers.push("zeromq dependency is still published in the 2.0 node package");
         for (const nodeName of REQUIRED_NODES) {
@@ -76,6 +107,72 @@ function evaluateReleaseGate(root = process.cwd(), env = process.env) {
                 && exists(root, `node-red-contrib-aiban-workflow/${htmlFile}`);
             checks.push({ id: `node:${nodeName}`, ok });
             if (!ok) blockers.push(`Node-RED node ${nodeName} is not fully registered`);
+        }
+    }
+
+    for (const legacyPath of LEGACY_PATHS) {
+        const ok = !exists(root, legacyPath);
+        checks.push({ id: `legacy-path:${legacyPath}`, ok });
+        if (!ok) blockers.push(`legacy 1.0 path is still present: ${legacyPath}`);
+    }
+
+    const requirementsPath = "requirements-v2.txt";
+    if (exists(root, requirementsPath)) {
+        const requirements = readText(root, requirementsPath).toLowerCase();
+        for (const dependency of FORBIDDEN_PYTHON_DEPENDENCIES) {
+            const ok = !new RegExp(`^\\s*${dependency}(?:[<>=!~]|\\s|$)`, "mi").test(requirements);
+            checks.push({ id: `legacy-python-dependency:${dependency}`, ok });
+            if (!ok) blockers.push(`legacy 1.0 Python dependency is still present: ${dependency}`);
+        }
+    }
+
+    const nodeRedLockPath = "node-red/package-lock.json";
+    if (exists(root, nodeRedLockPath) && exists(root, packagePath)) {
+        const lock = JSON.parse(readText(root, nodeRedLockPath));
+        const pkg = JSON.parse(readText(root, packagePath));
+        const linkedPackage = lock.packages?.["../node-red-contrib-aiban-workflow"] || {};
+        const versionOk = linkedPackage.version === pkg.version;
+        const noZeroMq = !linkedPackage.dependencies?.zeromq;
+        checks.push({ id: "node-red-lock:package-version", ok: versionOk });
+        checks.push({ id: "node-red-lock:no-zeromq", ok: noZeroMq });
+        if (!versionOk) blockers.push("Node-RED lockfile has stale workflow package metadata");
+        if (!noZeroMq) blockers.push("Node-RED lockfile still contains the 1.0 zeromq dependency");
+    }
+
+    if (exists(root, packagePath)) {
+        const packageVersion = JSON.parse(readText(root, packagePath)).version;
+        for (const cachePath of NODE_RED_CACHE_FILES) {
+            let ok = true;
+            if (exists(root, cachePath)) {
+                try {
+                    const cache = JSON.parse(readText(root, cachePath));
+                    const cachedPackage = cache["node-red-contrib-aiban-workflow"] || {};
+                    const cachedNodes = Object.keys(cachedPackage.nodes || {});
+                    ok = cachedPackage.version === packageVersion
+                        && cachedNodes.every(nodeName => nodeName.startsWith("aiban-"));
+                } catch {
+                    ok = false;
+                }
+            }
+            checks.push({ id: `node-red-cache:${cachePath}`, ok });
+            if (!ok) blockers.push(`Node-RED runtime cache still contains 1.0 node metadata: ${cachePath}`);
+        }
+        for (const lockSpec of GENERATED_NPM_LOCK_FILES) {
+            let ok = true;
+            if (exists(root, lockSpec.path)) {
+                try {
+                    const generatedLock = JSON.parse(readText(root, lockSpec.path));
+                    const recordedVersion = lockSpec.packageKey
+                        ? generatedLock.packages?.[lockSpec.packageKey]?.version
+                        : generatedLock.version;
+                    ok = recordedVersion === packageVersion
+                        && !/"zeromq"\s*:/.test(JSON.stringify(generatedLock));
+                } catch {
+                    ok = false;
+                }
+            }
+            checks.push({ id: `generated-npm-lock:${lockSpec.path}`, ok });
+            if (!ok) blockers.push(`generated npm lock cache has stale 1.0 metadata: ${lockSpec.path}`);
         }
     }
 
@@ -136,4 +233,13 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { evaluateReleaseGate, REQUIRED_NODES, REQUIRED_DOCS, REQUIRED_EXAMPLES };
+module.exports = {
+    evaluateReleaseGate,
+    REQUIRED_NODES,
+    REQUIRED_DOCS,
+    REQUIRED_EXAMPLES,
+    LEGACY_PATHS,
+    FORBIDDEN_PYTHON_DEPENDENCIES,
+    NODE_RED_CACHE_FILES,
+    GENERATED_NPM_LOCK_FILES,
+};

@@ -1,9 +1,9 @@
 # AiBan Workflow 2.0 开发计划
 
-> 文档版本：v3.0.15<br>
-> 更新日期：2026-08-09<br>
+> 文档版本：v3.0.16<br>
+> 更新日期：2026-08-26<br>
 > 当前分支：`v2.0-runtime-restart`<br>
-> 当前状态：T19～T22 开发交付物完成；T16～T18 真实环境验收和现场签字仍阻塞正式发布<br>
+> 当前状态：2.0-only 收口及 1.0 运行链路清理完成；T16～T18 真实环境验收和现场签字仍阻塞正式发布<br>
 > 配套任务书：[`WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md`](WORKFLOW_V2_DEVELOPMENT_TASK_SPEC.md)
 
 ---

@@ -2,7 +2,7 @@
 
 > AiBan 智能视频分析平台工作流引擎 2.0。<br>
 > Node-RED 是运行入口和业务编排引擎，Python Runner 只负责 AiBan SDK 与进程协议适配。<br>
-> 当前阶段：T19～T22 开发与自动化已完成；T16～T18 的真实 SDK、MySQL/API、24 小时现场验收和现场签字仍阻塞正式发布。
+> 当前阶段：仓库已完成 2.0-only 收口并移除 1.0 运行链路；T16～T18 的真实 SDK、MySQL/API、24 小时现场验收和现场签字仍阻塞正式发布。
 
 ## 当前状态
 
@@ -23,8 +23,9 @@
 - T19 Advanced Sequence 已覆盖缺步、数量、时长、外部步骤、presence、loop/guard/transition；T20 Monitor/Timer Record 已接入统一 scene/outcome 与持久状态。
 - T21 Custom Flow 已通过 `aiban-custom-flow` 接入受控 JSON DSL，覆盖变量、timer、guard、tracker、状态转换、恢复/中断和标准 outcome。
 - 2.0 已补齐原业务能力等价项：多模型/二阶子框事实归一化、sequence process monitoring、cycle record、API trigger、API output 和 socket/喇叭输出。
+- 1.0 Flask API、Python scene handler、ZeroMQ/PyMySQL 帧桥及停用的旧 Scene Manager 脚本已从仓库移除；当前 Node-RED 包版本为 `2.0.0-rc.1`。
 - T22 发布门禁工具 `tools/release_gate.js` 已完成；当前会明确阻塞 T16～T18 和现场签字未完成时的正式发布。
-- Node.js 全量自动化测试 `218/218` 通过；指定 Python 环境 `D:\my_env\python.exe` 的 unittest `11/11` 通过。
+- Node.js 全量自动化测试 `219/219` 通过；指定 Python 环境 `D:\my_env\python.exe` 的 unittest `11/11` 通过。
 - Runtime 状态已统一为 `STOPPED/STARTING/READY/STOPPING/ERROR/RECOVERING`，编辑器、HTTP 和消息入口共用真实状态控制。
 - Python 兼容型 restart 在新 session 中持续运行；生产 restart 等待旧 PID 退出后只拉起一个替换进程。
 - Windows 真 Python 子进程 restart、节点删除回收及测试前后 0 孤儿进程已通过 T04 验收。
@@ -152,6 +153,8 @@ workfolw_aiban_2.0/
 ## 安装
 
 ```powershell
+D:\my_env\python.exe -m pip install -r requirements-v2.txt
+
 cd node-red-contrib-aiban-workflow
 npm.cmd install
 
@@ -170,6 +173,8 @@ npx.cmd node-red --settings settings.js
 
 `aiban-runtime` 节点负责 Python Runner。开发环境可以在节点中启用 `useMock`；真实现场必须关闭 `useMock` 并配置 Python、SDK 和 Pipeline YAML。
 
+仓库不再包含 1.0 Flask 后端、Python scene handler 或 ZeroMQ 桥；生产回退必须使用仓库外单独保存的已发布版本。
+
 真实 SDK 操作步骤见 [docs/REAL_SDK_TEST.md](docs/REAL_SDK_TEST.md)。
 
 ## 自动化测试
@@ -177,7 +182,7 @@ npx.cmd node-red --settings settings.js
 ```powershell
 cd node-red-contrib-aiban-workflow
 
-# 当前全量：218/218（含 2.0 功能覆盖和隔离专项）
+# 当前全量：219/219（含 2.0 功能覆盖和隔离专项）
 npm.cmd test
 
 # Python Runner 生命周期专项

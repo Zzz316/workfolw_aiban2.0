@@ -1,6 +1,6 @@
 # T22 运行管理与发布门禁
 
-更新日期：2026-08-09
+更新日期：2026-08-26
 
 ## 1. 自动门禁
 
@@ -14,7 +14,12 @@ node tools/release_gate.js
 
 - Node-RED 节点是否在 `package.json` 注册，并且 `.js/.html` 文件存在。
 - README、开发计划、任务书、运维文档、2.0 功能清单、真实 SDK 测试报告和 T21/T22 文档是否存在。
-- Node-RED 包是否只发布 `aiban-*` 2.0 节点，且不包含 `zeromq` 依赖。
+- Node-RED 包版本是否为 `2.0.x`、作者字段是否不存在占位符、是否只发布 `aiban-*` 节点。
+- `icameraapi/`、`scenes/`、`core/`、`workflows/` 等 1.0 运行目录是否已经移除。
+- Python 依赖是否不再包含 `pyzmq`/`PyMySQL`。
+- Node-RED 锁文件是否与当前 2.0 包版本一致且不包含 `zeromq`。
+- Node-RED 自动生成的节点缓存是否不存在，或只包含当前版本的 `aiban-*` 2.0 节点。
+- `node_modules/.package-lock.json` 等 npm 内部缓存是否不存在，或与当前 2.0 包版本一致且不包含 ZeroMQ。
 - T19/T20/T21 示例 flow 是否存在。
 - T21/T22 是否在任务书中记录为 `100% / DONE / 0`。
 - T16/T17/T18 是否具备现场验收完成状态。
@@ -29,7 +34,7 @@ node tools/release_gate.js
 
 ## 2. 当前结论
 
-截至 2026-08-09，T21/T22 的开发交付物和自动门禁工具已完成，但正式 `workflow-v2.0.0` 仍不得发布。
+截至 2026-08-26，1.0 运行链路清理和 2.0-only 自动门禁已完成，但正式 `workflow-v2.0.0` 仍不得发布。
 
 阻塞项：
 
